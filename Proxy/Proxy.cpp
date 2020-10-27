@@ -20,88 +20,9 @@
 #pragma comment(lib,"Dnsapi.lib")
 
 
-//last也是有效char
-bool from_chars(const char* first, const char* last, int32_t& value)
-{
-	constexpr char map[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
 
-	int32_t memory = 0;
-	auto end = last + 1;
-	for (auto p = first; p != end; p++)
-	{
-		uint32_t i = *p;
-
-		i -= 48;
-
-		if (i < sizeof(map))
-		{
-			memory *= 10;
-
-			memory += map[i];
-		}
-		else
-		{
-			return false;
-		}
-	}
-
-	value = memory;
-	return true;
-}
-
-template <typename T>
-const char* Find(const char* first, const char* last, T func)
-{
-	auto end = last + 1;
-	for (auto p = first; p != end; p++)
-	{
-		if (func(*p))
-		{
-			return p;
-		}
-	}
-
-	return nullptr;
-}
-
-bool GetHostAndPortFrom(const char* first, const char* last, std::pair<std::string, uint16_t>& value)
-{
-
-	auto func = [](char c) { return c == ' '; };
-
-	first = Find(first, last, func);
-
-	if (first != nullptr)
-	{
-		first++;
-
-		last = Find(first, last, func);
-
-		if (last != nullptr)
-		{
-			last--;
-
-			auto index = Find(first, last, [](char c) { return c == ':'; });
-
-			if (index != nullptr)
-			{
-
-				int32_t port;
-
-				if (from_chars(index + 1, last, port))
-				{
-					size_t length = index - first;
-					std::string host{ first, length };
-
-					value = std::make_pair(host, static_cast<uint16_t>(port));
-
-					return true;
-				}
-			}
-		}
-	}
-
-	return false;
+void WSAExit(const std::string& message) {
+	Exit(message, WSAGetLastError());
 }
 
 
@@ -145,12 +66,12 @@ public:
 };
 
 template <typename TF, typename T, typename ...TS, typename ...TPS>
-constexpr void Used_PBack_Call(TF tf, PBack<T, TS...> value, TPS ...tps) {
+constexpr void _Used_PBack_Call(TF tf, PBack<T, TS...> value, TPS ...tps) {
 	if constexpr (sizeof...(TS) == 0) {
 		tf(tps..., value.GetValue());
 	}
 	else {
-		Used_PBack_Call(tf, value.GetPBack(), tps..., value.GetValue());
+		_Used_PBack_Call(tf, value.GetPBack(), tps..., value.GetValue());
 	}
 }
 
@@ -160,51 +81,15 @@ constexpr void Used_PBack_Call(TF tf, PBack<TS...> value) requires(std::is_invoc
 		tf();
 	}
 	else {
-		Used_PBack_Call(tf, value.GetPBack(), value.GetValue());
-	}
-}
-
-void WSAExit(const std::string& message) {
-	Exit(message, WSAGetLastError());
-}
-
-std::vector<DWORD> GetIPv4AddressFromHostName(std::u8string name) {
-
-	PDNS_RECORD next;
-
-	auto error = DnsQuery_UTF8(reinterpret_cast<char*>(name.data()), DNS_TYPE_A, DNS_QUERY_STANDARD, nullptr, &next, nullptr);
-
-	if (error == 123) {
-
-		return std::vector<DWORD>{};
-
-	}
-	else if (error != 0) {
-
-		Exit("DnsQuery Error");
-
-	}
-	else {
-		auto dns_free = [](auto p) {DnsRecordListFree(p, DnsFreeRecordList); };
-
-		std::unique_ptr<DNS_RECORD, decltype(dns_free)> data{ next, dns_free };
-		std::vector<DWORD> list{};
-
-
-		for (auto item = next; item != nullptr; item = item->pNext) {
-
-			if (item->wType == DNS_TYPE_A) {
-
-				list.push_back(item->Data.A.IpAddress);
-			}
-
+		
+		if constexpr (sizeof...(TS) == 1) {
+			tf(value.GetValue());
 		}
-
-
-		return list;
+		else {
+			_Used_PBack_Call(tf, value.GetPBack(), value.GetValue());
+		}
 	}
 }
-
 
 
 enum class IOPortFlag : ULONG_PTR {
@@ -710,17 +595,6 @@ public:
 };
 
 
-IPEndPoint GetIPEndPoint(const std::u8string& host) {
-	auto list = GetIPv4AddressFromHostName(host);
-
-	if (list.size() == 0) {
-		Exit("dns error");
-	}
-	else {
-		return IPEndPoint{ list[0], 443 };
-	}
-}
-
 template<typename ...TS>
 void Start(Fiber::FiberFuncType<TS...> func, TS ...value) {
 
@@ -763,6 +637,146 @@ void Start(Fiber::FiberFuncType<TS...> func, TS ...value) {
 		}
 	}
 }
+
+
+
+std::vector<DWORD> GetIPv4AddressFromHostName(std::u8string name) {
+
+	PDNS_RECORD next;
+
+	auto error = DnsQuery_UTF8(reinterpret_cast<char*>(name.data()), DNS_TYPE_A, DNS_QUERY_STANDARD, nullptr, &next, nullptr);
+
+	if (error == 123) {
+
+		return std::vector<DWORD>{};
+
+	}
+	else if (error != 0) {
+
+		Exit("DnsQuery Error");
+
+	}
+	else {
+		auto dns_free = [](auto p) {DnsRecordListFree(p, DnsFreeRecordList); };
+
+		std::unique_ptr<DNS_RECORD, decltype(dns_free)> data{ next, dns_free };
+		std::vector<DWORD> list{};
+
+
+		for (auto item = next; item != nullptr; item = item->pNext) {
+
+			if (item->wType == DNS_TYPE_A) {
+
+				list.push_back(item->Data.A.IpAddress);
+			}
+
+		}
+
+
+		return list;
+	}
+}
+
+
+
+IPEndPoint GetIPEndPoint(const std::u8string& host) {
+	auto list = GetIPv4AddressFromHostName(host);
+
+	if (list.size() == 0) {
+		Exit("dns error");
+	}
+	else {
+		return IPEndPoint{ list[0], 443 };
+	}
+}
+
+
+
+//last也是有效char
+bool from_chars(const char* first, const char* last, int32_t& value)
+{
+	constexpr char map[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+
+	int32_t memory = 0;
+	auto end = last + 1;
+	for (auto p = first; p != end; p++)
+	{
+		uint32_t i = *p;
+
+		i -= 48;
+
+		if (i < sizeof(map))
+		{
+			memory *= 10;
+
+			memory += map[i];
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	value = memory;
+	return true;
+}
+
+template <typename T>
+const char* Find(const char* first, const char* last, T func)
+{
+	auto end = last + 1;
+	for (auto p = first; p != end; p++)
+	{
+		if (func(*p))
+		{
+			return p;
+		}
+	}
+
+	return nullptr;
+}
+
+bool GetHostAndPortFrom(const char* first, const char* last, std::pair<std::string, uint16_t>& value)
+{
+
+	auto func = [](char c) { return c == ' '; };
+
+	first = Find(first, last, func);
+
+	if (first != nullptr)
+	{
+		first++;
+
+		last = Find(first, last, func);
+
+		if (last != nullptr)
+		{
+			last--;
+
+			auto index = Find(first, last, [](char c) { return c == ':'; });
+
+			if (index != nullptr)
+			{
+
+				int32_t port;
+
+				if (from_chars(index + 1, last, port))
+				{
+					size_t length = index - first;
+					std::string host{ first, length };
+
+					value = std::make_pair(host, static_cast<uint16_t>(port));
+
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+
 
 void CopyFunc(std::shared_ptr<TcpSocket> left, std::shared_ptr<TcpSocket> right) {
 
