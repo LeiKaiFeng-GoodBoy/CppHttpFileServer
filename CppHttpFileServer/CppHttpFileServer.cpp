@@ -355,13 +355,13 @@ private:
 		try {
 			p->Call();
 		}
-		catch (Win32SysteamException& e) {
-			Print("system throw");
-			Exit(e.what());
-		}
 		catch (Win32SocketException& e) {
 			Print("socket throw");
 
+			Exit(e.what());
+		}
+		catch (Win32SysteamException& e) {
+			Print("system throw");
 			Exit(e.what());
 		}
 		catch (...) {
