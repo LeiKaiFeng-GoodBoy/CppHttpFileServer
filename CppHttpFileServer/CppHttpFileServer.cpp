@@ -499,7 +499,7 @@ class TcpSocket : Delete_Base {
 		}
 		else {
 
-			throw Win32SocketException{ };
+			throw Win32SocketException{ "Read" };
 		}
 
 	}
@@ -545,7 +545,7 @@ public:
 		}
 		else {
 
-			throw Win32SocketException{ };
+			throw Win32SocketException{ "Write"};
 		}
 	}
 
@@ -579,7 +579,7 @@ public:
 				}
 				else {
 
-					throw Win32SocketException{ };
+					throw Win32SocketException{ "SendPack"};
 				}
 
 			}
@@ -604,7 +604,7 @@ public:
 
 		if (SOCKET_ERROR == ::bind(handle, reinterpret_cast<sockaddr*>(&address), sizeof(address))) {
 			
-			throw Win32SocketException{};
+			throw Win32SocketException{ "bind" };
 		}
 	}
 
@@ -642,7 +642,7 @@ public:
 				}
 				else {
 
-					throw Win32SocketException{ };
+					throw Win32SocketException{ "Connect"};
 				}
 			}
 		}
@@ -689,7 +689,7 @@ public:
 	void Listen(int backlog) {
 		if (SOCKET_ERROR == ::listen(m_handle, backlog)) {
 			
-			throw Win32SocketException{};
+			throw Win32SocketException{ "listen" };
 		}
 	}
 
@@ -702,7 +702,7 @@ public:
 		auto handle = std::make_shared<TcpSocket>();
 
 
-		char buffer[BUFFERLENGTH];
+		char buffer[BUFFERLENGTH]{};
 		
 		DWORD length;
 		
@@ -734,7 +734,7 @@ public:
 				}
 				else {
 					
-					throw Win32SocketException{ };
+					throw Win32SocketException{ "Accpet" };
 				}	
 			}	
 		}
@@ -761,7 +761,7 @@ void Start(Fiber::FiberFuncType<TS...> func, TS ...value) {
 	Fiber::Create(func, value...);
 
 
-	std::array<OVERLAPPED_ENTRY, 32> buffer;
+	std::array<OVERLAPPED_ENTRY, 32> buffer{};
 	
 	DWORD count;
 
@@ -1316,7 +1316,7 @@ class HttpResponseStrContent : public HttpResponse {
 protected:
 	void Send_(std::shared_ptr<TcpSocket> handle, TRANSMIT_PACKETS_ELEMENT header) override {
 		
-		TRANSMIT_PACKETS_ELEMENT pack[2];
+		TRANSMIT_PACKETS_ELEMENT pack[2]{};
 
 		pack[0] = header;
 
@@ -1381,7 +1381,7 @@ class HttpResponseFileContent : public HttpResponse {
 protected:
 	void Send_(std::shared_ptr<TcpSocket> handle, TRANSMIT_PACKETS_ELEMENT header) override {
 		
-		TRANSMIT_PACKETS_ELEMENT pack[2];
+		TRANSMIT_PACKETS_ELEMENT pack[2]{};
 
 		pack[0] = header;
 
