@@ -16,7 +16,7 @@
 //#include <WinDNS.h>
 #include <WinInet.h>
 
-#include "../../../include/leikaifeng.h"
+#include "leikaifeng.h"
 
 
 #pragma comment(lib,"Ws2_32.lib")
