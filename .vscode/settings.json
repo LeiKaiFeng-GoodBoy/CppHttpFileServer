@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "*.xaml": "xml",
+        "string": "cpp"
+    }
+}

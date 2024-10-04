@@ -6,7 +6,7 @@
 #include <string>
 #define WIN32_LEAN_AND_MEAN   
 #include <windows.h>
-
+//#define WC_ERR_INVALID_CHARS 0x0080
 void Print() {
 	std::cout << std::endl;
 }

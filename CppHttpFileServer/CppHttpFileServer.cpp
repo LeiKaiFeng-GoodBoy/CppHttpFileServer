@@ -1,4 +1,5 @@
-﻿#include <iostream>
+﻿#define _WIN32_WINNT 0x0600
+#include <iostream>
 #include <algorithm>
 #include <string>
 #include <array>
@@ -8,20 +9,20 @@
 #include <unordered_map>
 
 #define WIN32_LEAN_AND_MEAN   
-#include <Windows.h>
+#include <windows.h>
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <mswsock.h>
 //#include <WinDNS.h>
-#include <WinInet.h>
+#include <wininet.h>
 
 #include "leikaifeng.h"
 
 
-#pragma comment(lib,"Ws2_32.lib")
+//#pragma comment(lib,"Ws2_32.lib")
 //#pragma comment(lib,"Dnsapi.lib")
-#pragma comment(lib,"Wininet.lib")
+//#pragma comment(lib,"Wininet.lib")
 
 
 
@@ -1670,7 +1671,7 @@ void Request(std::shared_ptr<TcpSocket> handle) {
 		auto request = HttpReqest::Read(handle);
 
 		auto path = UTF8::GetWideChar(request->GetPath());
-		path = L"C:/Users/leikaifeng/Downloads" + path;
+		path = L"C:/Users/PC/" + path;
 		auto isff = File::IsFileOrFolder(path);
 
 		if (isff.IsFile()) {
