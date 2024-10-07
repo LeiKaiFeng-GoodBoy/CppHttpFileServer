@@ -1,4 +1,5 @@
-﻿#define _WIN32_WINNT 0x0600
+﻿#define _WIN32_WINNT _WIN32_WINNT_WIN8
+#define NTDDI_VERSION NTDDI_WIN8
 #include <iostream>
 #include <algorithm>
 #include <string>
@@ -35,7 +36,7 @@ class Win32SocketException : public Win32SysteamException {
 public:
 	using Win32SysteamException::Win32SysteamException;
 
-	Win32SocketException() : Win32SysteamException(WSAGetLastError()) {
+	Win32SocketException(const std::string& message) : Win32SysteamException(message, WSAGetLastError()) {
 
 	}
 };
@@ -169,7 +170,7 @@ private:
 
 	inline static LPFN_TRANSMITPACKETS s_transmitpackets;
 
-
+	inline static std::wstring s_folderPath;
 
 	static void InitializationWSA() {
 		WSADATA data;
@@ -194,6 +195,14 @@ private:
 	
 public:
 	
+	static void SetFolderPath(std::wstring& path){
+		s_folderPath = path;
+	}
+
+	static const std::wstring& GetFolderPath(){
+		return s_folderPath;
+	}
+
 	static auto& GetContentTypeMap() {
 
 		static std::unordered_map<std::wstring, std::u8string> map{};
@@ -208,6 +217,8 @@ public:
 		map.emplace(L".html", u8"text/html");
 		map.emplace(L".mp4", u8"video/mp4");
 		map.emplace(L".ts", u8"video/vnd.iptvforum.ttsmpeg2");
+		map.emplace(L".jpg", u8"image/jpeg");
+		map.emplace(L".jpeg", u8"image/jpeg");
 	}
 
 
@@ -556,9 +567,9 @@ public:
 		OverLappedEx overlapped = {};
 		
 		overlapped.other = GetCurrentFiber();
-		
-		if (Info::GetTransmitPackets()(m_handle, packs, count, 0, &overlapped, TF_USE_KERNEL_APC)) {
-			WSAExit("send pack 同步完成");
+		// TF_USE_SYSTEM_THREAD  TF_USE_KERNEL_APC
+		if (Info::GetTransmitPackets()(m_handle, packs, count, 0, &overlapped, TF_USE_SYSTEM_THREAD)) {
+			WSAExit("send pack syn over");
 		}
 		else {
 			auto e = WSAGetLastError();
@@ -655,6 +666,7 @@ public:
 	}
 
 	~TcpSocket() {
+		ShutDown();
 		::closesocket(m_handle);
 	}
 };
@@ -712,7 +724,7 @@ public:
 		overlapped.other = GetCurrentFiber();
 		
 		if (TRUE == Info::GetAcceptEx()(m_handle, handle->GetHandle(), buffer, 0, ADDRESSLENGTH, ADDRESSLENGTH, &length, &overlapped)) {
-			WSAExit("accept 同步完成");
+			WSAExit("accept syn over");
 		}
 		else {
 			auto value = WSAGetLastError();
@@ -1164,7 +1176,7 @@ public:
 		else {
 
 			path = HttpReqest::Path(value);
-
+			
 			while (HttpReqest::Find(view, value))
 			{
 				HttpReqest::AddDic(dic, value);
@@ -1231,7 +1243,15 @@ public:
 
 		Number::ToString(m_header, statusCode);
 
-		m_header.append(u8" OK\r\n");
+		if(statusCode == 404){
+			m_header.append(u8" Not Found\r\n");
+		}
+		else{
+			m_header.append(u8" OK\r\n");
+		}
+
+		m_header.append(u8"Connection: keep-alive\r\n");
+		m_header.append(u8"Keep-Alive: timeout=20, max=1000\r\n");
 	}
 
 	void SetContentRange(size_t start, size_t end, size_t size) {
@@ -1345,7 +1365,28 @@ public:
 
 
 
+class HttpResponse404 : public HttpResponse{
 
+
+public:
+
+	HttpResponse404() : HttpResponse(404){
+		this->SetContentLength(0);
+
+	}
+
+protected:
+	void Send_(std::shared_ptr<TcpSocket> handle, TRANSMIT_PACKETS_ELEMENT header) override {
+		
+		TRANSMIT_PACKETS_ELEMENT pack[1]{};
+
+		pack[0] = header;
+
+
+		handle->SendPack(pack, 1);
+	}
+
+};
 
 
 
@@ -1606,8 +1647,8 @@ public:
 	static void Add(std::wstring& s, const wchar_t* path) {
 		
 		s.append(L"<li><a href=\"");
-	
-		s.append(path);
+		std::wstring encodeUrl = ::UTF8::UrlEncode(path);
+		s.append(encodeUrl.data());
 
 		if constexpr (ISFOLDER) {
 
@@ -1637,6 +1678,7 @@ public:
 
 		while (eff.Get(data))
 		{
+			
 			if (data.IsFolder()) {
 
 				Add<true>(folder, data.Path());
@@ -1665,70 +1707,98 @@ public:
 };
 
 
-void Request(std::shared_ptr<TcpSocket> handle) {
-	try {
+void Request(std::shared_ptr<TcpSocket> handle, std::wstring& folderPath) {
+	
+	auto request = HttpReqest::Read(handle);
 
-		auto request = HttpReqest::Read(handle);
+	auto path = UTF8::GetWideChar(request->GetPath());
+	path =  folderPath + path;
+	
+	auto isff = File::IsFileOrFolder(path);
 
-		auto path = UTF8::GetWideChar(request->GetPath());
-		path = L"C:/Users/PC/" + path;
-		auto isff = File::IsFileOrFolder(path);
+	if (isff.IsFile()) {
 
-		if (isff.IsFile()) {
-
-			
-			
-			std::pair<size_t, std::pair<bool, size_t>> range;
-
-			if (request->GetRange(range)) {
-				HttpResponseFileContent response{ 206, path };
-
-				if (range.second.first) {
-					response.SetRange(range.first, range.second.second);
-				}
-				else {
-					response.SetRange(range.first);
-				}
-
-				response.Send(handle);
-
-			}
-			else {
-
-				HttpResponseFileContent response{ 200, path };
-
-				response.SetRange();
-
-				response.Send(handle);
-
-			}
-
-
-		}
-		else if (isff.IsFolder()) {
-			
-			if (path.ends_with(L'/')) {
-				path += L'*';
-			}
-			else {
-				path += L"/*";
-			}
 		
-			HttpResponseStrContent response{ 200, Html::GetHtml(path) };
+		
+		std::pair<size_t, std::pair<bool, size_t>> range;
+
+		if (request->GetRange(range)) {
+			HttpResponseFileContent response{ 206, path };
+
+			if (range.second.first) {
+				response.SetRange(range.first, range.second.second);
+			}
+			else {
+				response.SetRange(range.first);
+			}
 
 			response.Send(handle);
+
 		}
 		else {
-			//Print("path error");
+
+			HttpResponseFileContent response{ 200, path };
+
+			response.SetRange();
+
+			response.Send(handle);
+
 		}
+
+
+	}
+	else if (isff.IsFolder()) {
+		
+		if (path.ends_with(L'/')) {
+			path += L'*';
+		}
+		else {
+			path += L"/*";
+		}
+	
+		HttpResponseStrContent response{ 200, Html::GetHtml(path) };
+
+		response.Send(handle);
+	}
+	else {
+		Print("path error   ", ::UTF8::GetMultiByte(path));
+		
+		HttpResponse404 response{};
+
+
+		response.Send(handle);
+	}
+
+}
+
+
+void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
+
+	
+	try {
+		int n = 0;
+		while (true)
+		{
+			Request(handle, folderPath);
+			n++;
+			Print(n,  ":    重用链接");
+		}
+		
+
+		
+		
 	}
 	catch (Win32SysteamException& e) {
-		//Print(e.what());
+		Print(e.what()); 
 	}
 	catch (HttpReqest::FormatException& e) {
-		//Print("request format error");
+		Print("request format error");
 	}
+
+	
+
 }
+
 
 void Accpet() {
 	
@@ -1741,12 +1811,24 @@ void Accpet() {
 	while (true)
 	{
 		auto handle = lis.Accept();
-
-		Fiber::Create(Request, handle);
+		Print("new connect");
+		Fiber::Create(RequestLoop, handle, Info::GetFolderPath());
 	}
 
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+	if(argc != 2){
+		Exit("argce != 2");
+
+		return 0;
+	}
+
+	std::string path{argv[1]};
+
+	auto wpath = ::UTF8::GetWideChar(path);
+	std::replace(wpath.begin(), wpath.end(), L'\\', L'/');
+	
+	Info::SetFolderPath(wpath);
 	Start(Accpet);
 }

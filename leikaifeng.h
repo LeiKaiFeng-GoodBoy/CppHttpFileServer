@@ -1,12 +1,18 @@
 #pragma once
+#define _WIN32_WINNT _WIN32_WINNT_WIN8
+#define NTDDI_VERSION NTDDI_WIN8
 #ifndef _LEIKAIFENG
 #define _LEIKAIFENG
 
 #include <iostream>
 #include <string>
+#include <functional>
 #define WIN32_LEAN_AND_MEAN   
 #include <windows.h>
+#include <shlwapi.h>
 //#define WC_ERR_INVALID_CHARS 0x0080
+#define URL_ESCAPE_AS_UTF8              0x00040000
+#define URL_UNESCAPE_AS_UTF8            URL_ESCAPE_AS_UTF8
 void Print() {
 	std::cout << std::endl;
 }
@@ -51,7 +57,11 @@ public:
 		
 	}
 
-	Win32SysteamException(const std::string& message) : m_message(message) {
+	Win32SysteamException(const std::string& message) : Win32SysteamException(message, GetLastError()) {
+		
+	}
+
+	Win32SysteamException(const std::string& message, DWORD errorCode) : m_message(message + "__:__" + GetWin32ErrorMessage(errorCode)) {
 
 	}
 
@@ -77,22 +87,41 @@ public:
 class UTF8 {
 
 public:
-	static std::wstring GetWideChar(const std::u8string& s) {
 
-		constexpr auto CODEPAGE = CP_UTF8;
+	static std::wstring GetWideChar(const std::string& s){
 
-		constexpr auto FLAG = MB_ERR_INVALID_CHARS;
+		return GetWideChar(s, CP_ACP);
+	}
+
+	static std::wstring GetWideChar(const std::string& s, int codePage){
 
 		auto buffer = reinterpret_cast<const char*>(s.data());
 
 		auto size = static_cast<int>(s.size());
 
+		return GetWideChar(buffer, size, codePage);
+	}
+
+	static std::wstring GetWideChar(const std::u8string& s){
+		auto buffer = reinterpret_cast<const char*>(s.data());
+
+		auto size = static_cast<int>(s.size());
+
+		return GetWideChar(buffer, size, CP_UTF8);
+	}
+
+	static std::wstring GetWideChar(const char* buffer, const int size, int codePage) {
+
+		
+		constexpr auto FLAG = MB_ERR_INVALID_CHARS;
+
+		
 		if (size < 0) {
 			throw Win32SysteamException{ "size overflow" };
 		}
 		else {
 
-			auto length = MultiByteToWideChar(CODEPAGE, FLAG, buffer, size, nullptr, 0);
+			auto length = MultiByteToWideChar(codePage, FLAG, buffer, size, nullptr, 0);
 
 			if (0 == length) {
 				throw Win32SysteamException{};
@@ -103,7 +132,7 @@ public:
 
 				ret_s.resize(static_cast<size_t>(length));
 
-				if (length != MultiByteToWideChar(CODEPAGE, FLAG, buffer, size, ret_s.data(), length)) {
+				if (length != MultiByteToWideChar(codePage, FLAG, buffer, size, ret_s.data(), length)) {
 
 					throw Win32SysteamException{};
 				}
@@ -119,10 +148,33 @@ public:
 	}
 
 	static std::u8string GetUTF8(const std::wstring& s) {
+		std::u8string ret_s{};
 
-		constexpr auto CODEPAGE = CP_UTF8;
+		GetMultiByte(s, CP_UTF8, [&](int n)-> char*{
 
-		constexpr auto FLAG = WC_ERR_INVALID_CHARS;
+			ret_s.resize(static_cast<size_t>(n));
+			return  reinterpret_cast<char*>(ret_s.data());
+		});
+
+		return ret_s;
+	}
+
+	static std::string GetMultiByte(const std::wstring& s){
+		std::string ret_s{};
+
+		GetMultiByte(s, CP_ACP, [&](int n)-> char*{
+
+			ret_s.resize(static_cast<size_t>(n));
+			return ret_s.data();
+		});
+
+		return ret_s;
+	}
+
+	static void GetMultiByte(const std::wstring& s, int codePage, std::function<char*(int)> func) {
+
+		
+		auto flag = codePage != CP_UTF8 ? 0: WC_ERR_INVALID_CHARS;
 
 		auto buffer = s.data();
 
@@ -134,65 +186,60 @@ public:
 		}
 		else {
 
-			auto length = WideCharToMultiByte(CODEPAGE, FLAG, buffer, size, nullptr, 0, nullptr, nullptr);
+			auto length = WideCharToMultiByte(codePage, flag, buffer, size, nullptr, 0, nullptr, nullptr);
 
 			if (0 == length) {
 				throw Win32SysteamException{};
 			}
 			else {
-				std::u8string ret_s{};
-
-				ret_s.resize(static_cast<size_t>(length));
-
-
-				if (length != WideCharToMultiByte(CODEPAGE, FLAG, buffer, size, reinterpret_cast<char*>(ret_s.data()), length, nullptr, nullptr))
+				
+				auto res_s = func(length);
+				
+				if (length != WideCharToMultiByte(codePage, flag, buffer, size, res_s, length, nullptr, nullptr))
 				{
 					throw Win32SysteamException{};
 				}
-				else {
-					return ret_s;
-				}
+				
 
 			}
 		}
 	}
 
-	static std::string GetMultiByte(const std::wstring& s) {
 
-		constexpr auto CODEPAGE = CP_ACP;
+	static std::wstring UrlEncode(const wchar_t* s){
 
-		constexpr auto FLAG = 0;
+		wchar_t buff[2048];
+		DWORD length = 2048;
+		auto isok =::UrlEscapeW(s, buff, &length, URL_ESCAPE_AS_UTF8);
 
-		auto buffer = s.data();
-
-		auto size = static_cast<int>(s.size());
-
-		if (size < 0) {
-
-			throw Win32SysteamException{ "size overflow" };
+		if(isok == S_OK)
+		{
+			return std::wstring {buff, length};
 		}
-		else {
+		else if(isok == E_POINTER){
+			throw new Win32SysteamException{"url encode buff low size"};
+		}
+		else{
+			throw new Win32SysteamException{};
+		}
+	}
 
-			auto length = WideCharToMultiByte(CODEPAGE, FLAG, buffer, size, nullptr, 0, nullptr, nullptr);
+	static std::wstring UrlDecode(std::wstring& s){
+		
+		
+		wchar_t buff[2048];
+		DWORD length = 2048;
+		auto isok =::UrlUnescapeW(s.data(), buff, &length, URL_UNESCAPE_AS_UTF8);
 
-			if (0 == length) {
-				throw Win32SysteamException{};
-			}
-			else {
-				std::string ret_s{};
-
-				ret_s.resize(static_cast<size_t>(length));
-
-
-				if (length != WideCharToMultiByte(CODEPAGE, FLAG, buffer, size, ret_s.data(), length, nullptr, nullptr))
-				{
-					throw Win32SysteamException{};
-				}
-				else {
-					return ret_s;
-				}
-
-			}
+		if(isok == S_OK)
+		{
+			return std::wstring {buff, length};
+		}
+		else if(isok == E_POINTER){
+			throw new Win32SysteamException{"url encode buff low size"};
+		}
+		else{
+			throw new Win32SysteamException{};
 		}
 	}
 };
