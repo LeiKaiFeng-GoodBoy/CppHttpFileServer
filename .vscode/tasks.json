@@ -5,7 +5,7 @@
         "type": "shell",
         "label": "C/C++: g++ build active file",
         "command": "/usr/bin/x86_64-w64-mingw32-g++",
-        "args": [   "-std=c++2a",  "-fconcepts", "-static", "${file}", "-lws2_32", "-lwininet","-lshlwapi", "-o", "${workspaceFolder}/out/${fileBasenameNoExtension}.exe"],
+        "args": [  "-O2", "-std=c++2a",  "-fconcepts", "-static", "${file}", "-lws2_32", "-lwininet","-lshlwapi", "-o", "${workspaceFolder}/out/${fileBasenameNoExtension}.exe"],
         "options": {
           "cwd": "/usr/bin"
         },

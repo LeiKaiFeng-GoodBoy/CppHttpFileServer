@@ -17,9 +17,9 @@
 #include <mswsock.h>
 //#include <WinDNS.h>
 #include <wininet.h>
-
+#include <mstcpip.h>
 #include "leikaifeng.h"
-
+#define SIO_TCP_INFO _WSAIORW(IOC_VENDOR,39)
 
 //#pragma comment(lib,"Ws2_32.lib")
 //#pragma comment(lib,"Dnsapi.lib")
@@ -37,6 +37,31 @@ public:
 	using Win32SysteamException::Win32SysteamException;
 
 	Win32SocketException(const std::string& message) : Win32SysteamException(message, WSAGetLastError()) {
+
+	}
+};
+
+class SystemException : public std::exception {
+std::string m_message;
+public:
+
+	SystemException(std::string message) : m_message(message) {
+
+	}
+
+	
+	const char* what() const noexcept override {
+		return m_message.c_str();
+	}
+};
+
+
+class ArgumentException : public ::SystemException {
+
+
+public:
+
+	ArgumentException(std::string message) : SystemException(message) {
 
 	}
 };
@@ -451,6 +476,11 @@ public:
 		Info::PostToIoCompletionPort(IOPortFlag::FiberCreate, handle);
 	}
 
+	static void PostMain(LPVOID fiber){
+
+		::Info::PostToIoCompletionPort(IOPortFlag::FiberCreate, fiber);
+	}
+
 	static void SwitchMain() {
 		Fiber::Switch(s_fiber);
 	}
@@ -478,9 +508,46 @@ public:
 	LPVOID other;
 };
 
+typedef enum _TCPSTATE {
+  TCPSTATE_CLOSED,
+  TCPSTATE_LISTEN,
+  TCPSTATE_SYN_SENT,
+  TCPSTATE_SYN_RCVD,
+  TCPSTATE_ESTABLISHED,
+  TCPSTATE_FIN_WAIT_1,
+  TCPSTATE_FIN_WAIT_2,
+  TCPSTATE_CLOSE_WAIT,
+  TCPSTATE_CLOSING,
+  TCPSTATE_LAST_ACK,
+  TCPSTATE_TIME_WAIT,
+  TCPSTATE_MAX
+} TCPSTATE;
+
+typedef struct _TCP_INFO_v0 {
+  TCPSTATE State;
+  ULONG    Mss;
+  ULONG64  ConnectionTimeMs;
+  BOOLEAN  TimestampsEnabled;
+  ULONG    RttUs;
+  ULONG    MinRttUs;
+  ULONG    BytesInFlight;
+  ULONG    Cwnd;
+  ULONG    SndWnd;
+  ULONG    RcvWnd;
+  ULONG    RcvBuf;
+  ULONG64  BytesOut;
+  ULONG64  BytesIn;
+  ULONG    BytesReordered;
+  ULONG    BytesRetrans;
+  ULONG    FastRetrans;
+  ULONG    DupAcksIn;
+  ULONG    TimeoutEpisodes;
+  UCHAR    SynRetrans;
+} TCP_INFO_v0, *PTCP_INFO_v0;
+
 class TcpSocket : Delete_Base {
 	SOCKET m_handle;
-
+	bool is_close;
 	ULONG Read(char* buffer, ULONG size, DWORD flag) {
 
 		WSABUF buf = {};
@@ -518,7 +585,7 @@ class TcpSocket : Delete_Base {
 
 public:
 
-	TcpSocket() {
+	TcpSocket() :is_close(false){
 		m_handle = Info::CreateIPv4TcpSocket();
 
 
@@ -526,7 +593,8 @@ public:
 	}
 
 	ULONG Write(char* buffer, ULONG size) {
-		
+		this->OnClose_Throw();
+
 		WSABUF buf = {};
 
 		buf.buf = buffer;
@@ -562,13 +630,17 @@ public:
 	}
 
 	void SendPack(LPTRANSMIT_PACKETS_ELEMENT packs, DWORD count) {
-
+		this->OnClose_Throw();
 		
 		OverLappedEx overlapped = {};
 		
 		overlapped.other = GetCurrentFiber();
 		// TF_USE_SYSTEM_THREAD  TF_USE_KERNEL_APC
-		if (Info::GetTransmitPackets()(m_handle, packs, count, 0, &overlapped, TF_USE_SYSTEM_THREAD)) {
+
+		Print("TransmitPackets start");
+		auto isok = Info::GetTransmitPackets()(m_handle, packs, count, 0, &overlapped, TF_USE_SYSTEM_THREAD);
+		Print("TransmitPackets end");
+		if (isok) {
 			WSAExit("send pack syn over");
 		}
 		else {
@@ -578,9 +650,9 @@ public:
 				throw Win32SocketException{ static_cast<DWORD>(e) };
 			}
 			else {
-
+				Print("TransmitPackets switch start");
 				Fiber::SwitchMain();
-
+				Print("TransmitPackets switch end");
 				DWORD count;
 
 				DWORD flag;
@@ -591,22 +663,73 @@ public:
 				}
 				else {
 
-					throw Win32SocketException{ "SendPack"};
+					throw Win32SocketException{ "SendPack",  WSAGetLastError()};
 				}
 
 			}
 		}
 	}
 
+	auto GetTcpInfo(TCP_INFO_v0& tcpInfo){
+		this->OnClose_Throw();
+
+
+		DWORD ver = 0;
+		DWORD length =0;
+		auto isok = ::WSAIoctl(
+			m_handle, SIO_TCP_INFO,
+			&ver, sizeof(ver),
+			&tcpInfo, sizeof(tcpInfo),&length,
+			nullptr, nullptr);
+
+		if(isok == SOCKET_ERROR){
+			throw Win32SocketException("tcp_info error", WSAGetLastError());
+		}
+		else{
+			Print("get tcp_info ok");
+		}
+	}
+
+
+	auto SetKeepAlive(){
+		this->OnClose_Throw();
+
+
+		tcp_keepalive v = {};
+
+		v.onoff = 1;
+
+		v.keepalivetime = 5000;
+
+		v.keepaliveinterval = 1000;
+		DWORD length =0;
+		auto isok = ::WSAIoctl(
+			m_handle,SIO_KEEPALIVE_VALS,
+			&v, sizeof(v),
+			nullptr,0,&length,
+			nullptr, nullptr);
+
+
+		if(isok == SOCKET_ERROR){
+			throw Win32SocketException("tcp_keepalive error", WSAGetLastError());
+		}
+		else{
+			Print("set tcp_keepalive ok");
+		}
+	}
+
 	ULONG Read(char* buffer, ULONG size) {
+		this->OnClose_Throw();
 		return this->Read(buffer, size, 0);
 	}
 
 	ULONG Peek(char* buffer, ULONG size) {
+		this->OnClose_Throw();
 		return this->Read(buffer, size, MSG_PEEK);
 	}
 
 	auto GetHandle() const {
+		
 		return m_handle;
 	}
 
@@ -661,13 +784,38 @@ public:
 	}
 
 	void ShutDown() {
-
+		this->OnClose_Throw();
 		::shutdown(m_handle, SD_BOTH);
 	}
 
+	void OnClose_Throw(){
+		if(is_close){
+			throw Win32SocketException{"socket is close can not use"};
+		}
+	}
+
+
+	void Close(){
+
+		if(is_close==false){
+
+			is_close = true;
+
+			auto isok = ::closesocket(m_handle);
+
+			if(isok == SOCKET_ERROR){
+				WSAExit("close socker error");
+			}
+			Print("socket close");
+		}
+
+		
+	}
+
 	~TcpSocket() {
-		ShutDown();
-		::closesocket(m_handle);
+		
+
+		this->Close();
 	}
 };
 
@@ -697,6 +845,15 @@ public:
 	void Bind(const IPEndPoint& endPoint) {
 
 		TcpSocket::Bind(m_handle, endPoint);
+		DWORD v = 1;
+		auto isok = ::setsockopt(m_handle, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char*>(&v), sizeof(v));
+
+		if(isok == SOCKET_ERROR){
+			throw Win32SocketException{ "set KEEPALIVE opt error", WSAGetLastError() };
+		}
+		else{
+			Print("set KEEPALIVE opt ok");
+		}
 	}
 
 	void Listen(int backlog) {
@@ -743,6 +900,18 @@ public:
 					
 					TcpSocketListen::CopyOptions(m_handle, handle->GetHandle());
 
+					DWORD v = 0;
+					int length = sizeof(v);
+					
+					auto isok = ::getsockopt(handle->GetHandle(), SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char*>(&v), &length);
+
+					if(isok == SOCKET_ERROR){
+						throw Win32SocketException{ "get SO_KEEPALIVE opt error", WSAGetLastError() };
+					}
+					else{
+						Print("get SO_KEEPALIVE opt value:", v);
+					}
+
 					return handle;
 				}
 				else {
@@ -780,7 +949,7 @@ void Start(Fiber::FiberFuncType<TS...> func, TS ...value) {
 
 	while (true)
 	{
-		if (TRUE != GetQueuedCompletionStatusEx(Info::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, false)) {
+		if (TRUE != GetQueuedCompletionStatusEx(Info::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, true)) {
 			Exit("get io error");
 		}
 		else {
@@ -982,12 +1151,23 @@ public:
 class HttpReqest : Delete_Base {
 	
 public:
-	class FormatException {
+	class FormatException : public std::exception {
 
-	};
+	std::string m_message;
+public:
+
+	FormatException(std::string message) :m_message(message){
+
+	}
+
+
+	const char* what() const noexcept override {
+		return m_message.c_str();
+	}
+};
 
 private:
-	constexpr static size_t BUFFER_SIZE = 1024;
+	constexpr static size_t BUFFER_SIZE = 4096;
 
 
 	std::u8string m_buffer;
@@ -1014,11 +1194,11 @@ private:
 				return ret;
 			}
 			else {
-				throw HttpReqest::FormatException{};
+				throw HttpReqest::FormatException{"url decode error"};
 			}
 		}
 		else {
-			throw HttpReqest::FormatException{};
+			throw HttpReqest::FormatException{"find path error"};
 		}
 	}
 
@@ -1053,7 +1233,7 @@ private:
 		auto index = s.find(u8": ");
 
 		if (index == decltype(s)::npos) {
-			throw HttpReqest::FormatException{};
+			throw HttpReqest::FormatException{"find header : error"};
 		}
 		else {
 
@@ -1164,14 +1344,14 @@ public:
 		auto& dic = ret->m_dic;
 
 		auto length = socket->Peek(reinterpret_cast<char*>(buffer.data()), static_cast<ULONG>(buffer.size()));
-
+		
 		std::u8string_view view{ buffer.data(),static_cast<size_t>(length) };
-
+		//Print(::UTF8::GetMultiByte(::UTF8::GetWideChar(std::u8string{ view})));
 		std::u8string_view value{};
 		
 		if (!HttpReqest::Find(view, value)) {
 		
-			throw HttpReqest::FormatException{};
+			throw HttpReqest::FormatException{"find header line error length:"};
 		}
 		else {
 
@@ -1222,6 +1402,7 @@ public:
 	~CreateReadOnlyFile()
 	{
 		CloseHandle(m_handle);
+		Print("file close");
 	}
 };
 
@@ -1455,37 +1636,55 @@ public:
 	}
 
 
+	constexpr static size_t MAX_SEND_LENGTH = 16777216;
+	//constexpr static size_t MAX_SEND_LENGTH = 5112660345;
 
 	void SetRange(size_t start, size_t end) {
+
+		if(end >= m_fileSize){
+			throw new ArgumentException{"request set renge end > fileSize"};
+		}
+
+		if(start> end){
+			throw new ArgumentException{"request set renge start > end"};
+		}
+
+		auto length = (end - start) + 1;
+
+		auto v = 0;
+
+		if(length > MAX_SEND_LENGTH){
+			auto v = length - MAX_SEND_LENGTH;
+			end -= v;
+
+			length -=v;
+		}
+
+	
+
+
+		Print("start:", start, "end:", end, "length:", length, "v:",v, "fileSize:", m_fileSize);
 		m_start_range = start;
 
 		m_end_range = end;
+		
+		
+		
 
-		m_length = (end - start) + 1;
+		m_length = length;
 
 		this->Set();
 	}
 
 	void SetRange(size_t start) {
 
-		m_start_range = start;
+		this->SetRange(start, m_fileSize - 1);
 
-		m_end_range = m_fileSize - 1;
-
-		m_length = m_fileSize - start;
-
-		this->Set();
 	}
 
 	void SetRange() {
 
-		m_start_range = 0;
-
-		m_end_range = m_fileSize - 1;
-
-		m_length = m_fileSize;
-
-		this->Set();
+		this->SetRange(0, m_fileSize - 1);
 	}
 };
 
@@ -1706,11 +1905,101 @@ public:
 
 };
 
+template<typename T>
+class MyEventQuery{
 
-void Request(std::shared_ptr<TcpSocket> handle, std::wstring& folderPath) {
+private:
+	std::deque<T> m_query;
+
+	HANDLE m_wait_fiblr_handle;
+	bool is_set_handle;
+	bool is_close;
+
+	auto PostMain(){
+		if(is_set_handle){
+			
+			is_set_handle=false;
+			
+			
+			::Fiber::PostMain(m_wait_fiblr_handle);
+
+			
+		}
+		
+	}
+
+	auto OnClose_Throw(){
+		if(is_close){
+			throw ArgumentException{"MyEventQuery is close can not use"};
+		}
+	}
+
+public:
+
+	MyEventQuery(): m_wait_fiblr_handle(nullptr), is_set_handle(false), is_close(false){
+
+	}
+
+	auto Size(){
+		this->OnClose_Throw();
+
+		return m_query.size();
+	}
+
+	auto Wait(){
+		this->OnClose_Throw();
+
+		if(m_query.size() != 0){
+			auto v = std::move(m_query.front());
+			m_query.pop_front();
+			return v;
+		}
+
+		if(is_set_handle){
+			throw ArgumentException{"MyEventQuery handle is not post main"};
+		}
+
+		m_wait_fiblr_handle = ::GetCurrentFiber();
+		is_set_handle = true;
+
+		::Fiber::SwitchMain();
+
+		if(m_query.size() != 0){
+			auto v = std::move(m_query.front());
+			m_query.pop_front();
+			return v;
+		}
+
+		throw ArgumentException{"MyEventQuery can not has item"};
+	}
+
+
+	auto Set(T v){
+		this->OnClose_Throw();
+
+		m_query.push_back(std::move(v));
+
+		this->PostMain();
+	}
+
+	void Close(){
+		is_close= true;
+
+		this->PostMain();
+	}
+
+	~MyEventQuery(){
+
+
+		this->Close();
+
+		Print("close MyEventQuery");
+	}
+
+};
+
+void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest> request, std::wstring& folderPath){
 	
-	auto request = HttpReqest::Read(handle);
-
 	auto path = UTF8::GetWideChar(request->GetPath());
 	path =  folderPath + path;
 	
@@ -1768,20 +2057,57 @@ void Request(std::shared_ptr<TcpSocket> handle, std::wstring& folderPath) {
 
 		response.Send(handle);
 	}
-
 }
 
 
-void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
 
+void ResponseLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyEventQuery<std::unique_ptr<HttpReqest>>> query, std::wstring folderPath){
 	
-	try {
-		int n = 0;
+	try
+	{
 		while (true)
 		{
-			Request(handle, folderPath);
+			auto request = query->Wait();
+
+			Response(handle, std::move(request), folderPath);
+
+		}	
+	}
+	catch (Win32SysteamException& e) {
+		Print(e.what()); 
+	}
+	catch (HttpReqest::FormatException& e) {
+		Print("request format error:", e.what());
+	}
+	catch (::SystemException& e) {
+		Print("SystemException :", e.what());
+	}
+	
+	handle->Close();
+}
+
+void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
+
+	auto query = std::make_shared<MyEventQuery<std::unique_ptr<HttpReqest>>>();
+	try {
+		int n = 0;
+
+		
+		::Fiber::Create(ResponseLoop, handle, query, folderPath);
+		while (true)
+		{
+			auto request = HttpReqest::Read(handle);
+			Print("request read over");
+			query->Set(std::move(request));
+			
+				
 			n++;
-			Print(n,  ":    重用链接");
+			TCP_INFO_v0 info ={};
+
+			handle->GetTcpInfo(info);
+			Print(n,  ":    re use link", "send bytes count:", info.BytesOut, "event query size:", query->Size());
+
+			
 		}
 		
 
@@ -1792,11 +2118,14 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
 		Print(e.what()); 
 	}
 	catch (HttpReqest::FormatException& e) {
-		Print("request format error");
+		Print("request format error:", e.what());
+	}
+	catch (::SystemException& e) {
+		Print("SystemException :", e.what());
 	}
 
-	
-
+	query->Close();
+	handle->Close();
 }
 
 
@@ -1811,6 +2140,8 @@ void Accpet() {
 	while (true)
 	{
 		auto handle = lis.Accept();
+
+		handle->SetKeepAlive();
 		Print("new connect");
 		Fiber::Create(RequestLoop, handle, Info::GetFolderPath());
 	}
