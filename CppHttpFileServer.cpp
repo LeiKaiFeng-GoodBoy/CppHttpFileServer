@@ -25,6 +25,17 @@
 //#pragma comment(lib,"Dnsapi.lib")
 //#pragma comment(lib,"Wininet.lib")
 
+template<typename TIn, typename TOut>
+TOut Integer_cast(TIn v){
+	
+	if(v > std::numeric_limits<TOut>::max() || v< std::numeric_limits<TOut>::min()){
+		throw std::overflow_error("Integer_cast Overflow");
+	}
+	else{
+		return static_cast<TOut>(v);
+	}
+	
+}
 
 
 void WSAExit(const std::string& message) {
@@ -141,6 +152,8 @@ public:
 
 		if (handle == INVALID_SOCKET) {
 			WSAExit("create socket error");
+
+			throw Win32SocketException{};
 		}
 		else {
 			return handle;
@@ -169,6 +182,8 @@ private:
 
 		if (result == SOCKET_ERROR) {
 			WSAExit("get function address error");
+
+			throw Win32SocketException{};
 		}
 		else {
 			return functionAddress;
@@ -180,6 +195,8 @@ private:
 
 		if (handle == nullptr) {
 			Exit("create Io Completion Port error");
+
+			throw Win32SysteamException{};
 		}
 		else {
 			return handle;
@@ -503,10 +520,95 @@ public:
 	}
 };
 
+
+
 class OverLappedEx : public OVERLAPPED {
 public:
 	LPVOID other;
 };
+
+
+class CreateReadOnlyFile : Delete_Base {
+
+	HANDLE m_handle;
+
+public:
+	CreateReadOnlyFile(const std::wstring& path) {
+		m_handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+
+		if (m_handle == INVALID_HANDLE_VALUE) {
+			throw Win32SysteamException{};
+		}
+		Info::AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
+	}
+
+	auto GetSize() {
+		LARGE_INTEGER size;
+		if (GetFileSizeEx(m_handle, &size)) {
+			return size.QuadPart;
+		}
+		else {
+			throw Win32SysteamException{};
+		}
+	}
+
+	auto Read(char* buf, DWORD size, size_t offsetCount){
+
+		OverLappedEx overlapped = {};
+
+		{
+			LARGE_INTEGER offset = {};
+			offset.QuadPart=offsetCount;
+
+			overlapped.Offset = offset.LowPart;
+			overlapped.OffsetHigh = offset.HighPart;
+		}
+		
+		
+		overlapped.other = GetCurrentFiber();
+		
+		auto ret = ::ReadFile(m_handle, buf, size, nullptr, &overlapped);
+		auto e = GetLastError();
+		if(ret != 0 || e != ERROR_IO_PENDING){
+			throw Win32SysteamException{"read file error:", e};
+		}
+
+		
+		Fiber::SwitchMain();
+	
+		DWORD count;
+
+		{
+
+			auto ret = GetOverlappedResult(m_handle, &overlapped, &count, false);
+
+			auto e = GetLastError();
+
+			if (ret) {
+				
+				return static_cast<ULONG>(count);
+			}
+			else {
+
+				throw Win32SocketException{ "Read file over error:", e };
+			}
+		}
+
+		
+
+	}
+
+	auto GetHandle() {
+		return m_handle;
+	}
+
+	~CreateReadOnlyFile()
+	{
+		CloseHandle(m_handle);
+		Print("file close");
+	}
+};
+
 
 typedef enum _TCPSTATE {
   TCPSTATE_CLOSED,
@@ -549,6 +651,7 @@ class TcpSocket : Delete_Base {
 	SOCKET m_handle;
 	bool is_close;
 	ULONG Read(char* buffer, ULONG size, DWORD flag) {
+		this->OnClose_Throw();
 
 		WSABUF buf = {};
 
@@ -592,21 +695,27 @@ public:
 		Info::AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
 	}
 
-	ULONG Write(char* buffer, ULONG size) {
-		this->OnClose_Throw();
+	auto Write(char* buffer, DWORD len){
 
 		WSABUF buf = {};
 
-		buf.buf = buffer;
-		
-		buf.len = size;
+		buf.buf  = buffer;
+
+		buf.len= len;
+
+		return this->Write(&buf, 1);
+	}
+
+
+	ULONG Write(WSABUF* buf, DWORD bufCount) {
+		this->OnClose_Throw();
 
 		OverLappedEx overlapped = {};
 
 		overlapped.other = GetCurrentFiber();
-
-		auto ret = WSASend(m_handle, &buf, 1, nullptr, 0, &overlapped, nullptr);
 		
+		auto ret = WSASend(m_handle, buf, bufCount, nullptr, 0, &overlapped, nullptr);
+	
 		auto e = WSAGetLastError();
 		
 		if (ret != 0 && e != WSA_IO_PENDING) {
@@ -614,20 +723,59 @@ public:
 		}
 		
 		Fiber::SwitchMain();
-
+	
 		DWORD count;
 		
 		DWORD flag;
 		
 		if (WSAGetOverlappedResult(m_handle, &overlapped, &count, false, &flag)) {
-
+			
 			return static_cast<ULONG>(count);
 		}
 		else {
 
-			throw Win32SocketException{ "Write"};
+			throw Win32SocketException{ "Write send error:", static_cast<DWORD>(WSAGetLastError())};
 		}
 	}
+
+	
+	auto WriteFile(CreateReadOnlyFile& file, size_t offset, DWORD count){
+		
+		
+		const size_t SIZEBUFF = 2097152;
+		//const size_t SIZEBUFF = 8192;
+		auto buf = std::make_unique<char[]>(SIZEBUFF);
+		
+		while (count > 0)
+		{
+			
+			auto redCount = file.Read(buf.get(), SIZEBUFF, offset);
+
+			if(redCount ==0){
+				Print("file loop read 0");
+				return;
+			}
+			DWORD canSendCount =0;
+			if(count > redCount){
+				canSendCount=redCount;
+			}
+			else{
+				canSendCount =count;
+			}
+
+			auto n = this->Write(buf.get(), canSendCount);
+
+
+			count-=n;
+
+			offset+=n;
+		}
+		
+
+
+
+	}
+
 
 	void SendPack(LPTRANSMIT_PACKETS_ELEMENT packs, DWORD count) {
 		this->OnClose_Throw();
@@ -663,12 +811,13 @@ public:
 				}
 				else {
 
-					throw Win32SocketException{ "SendPack",  WSAGetLastError()};
+					throw Win32SocketException{ "SendPack",  static_cast<DWORD>(WSAGetLastError())};
 				}
 
 			}
 		}
 	}
+
 
 	auto GetTcpInfo(TCP_INFO_v0& tcpInfo){
 		this->OnClose_Throw();
@@ -719,12 +868,12 @@ public:
 	}
 
 	ULONG Read(char* buffer, ULONG size) {
-		this->OnClose_Throw();
+
 		return this->Read(buffer, size, 0);
 	}
 
 	ULONG Peek(char* buffer, ULONG size) {
-		this->OnClose_Throw();
+
 		return this->Read(buffer, size, MSG_PEEK);
 	}
 
@@ -845,6 +994,10 @@ public:
 	void Bind(const IPEndPoint& endPoint) {
 
 		TcpSocket::Bind(m_handle, endPoint);
+		
+	}
+
+	/* auto SetSockOpt(){
 		DWORD v = 1;
 		auto isok = ::setsockopt(m_handle, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char*>(&v), sizeof(v));
 
@@ -855,6 +1008,7 @@ public:
 			Print("set KEEPALIVE opt ok");
 		}
 	}
+ */
 
 	void Listen(int backlog) {
 		if (SOCKET_ERROR == ::listen(m_handle, backlog)) {
@@ -882,6 +1036,8 @@ public:
 		
 		if (TRUE == Info::GetAcceptEx()(m_handle, handle->GetHandle(), buffer, 0, ADDRESSLENGTH, ADDRESSLENGTH, &length, &overlapped)) {
 			WSAExit("accept syn over");
+
+			throw Win32SocketException{};
 		}
 		else {
 			auto value = WSAGetLastError();
@@ -898,21 +1054,10 @@ public:
 				
 				if (WSAGetOverlappedResult(m_handle, &overlapped, &count, false, &flag)) {
 					
-					TcpSocketListen::CopyOptions(m_handle, handle->GetHandle());
-
-					DWORD v = 0;
-					int length = sizeof(v);
-					
-					auto isok = ::getsockopt(handle->GetHandle(), SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char*>(&v), &length);
-
-					if(isok == SOCKET_ERROR){
-						throw Win32SocketException{ "get SO_KEEPALIVE opt error", WSAGetLastError() };
-					}
-					else{
-						Print("get SO_KEEPALIVE opt value:", v);
-					}
+					//TcpSocketListen::CopyOptions(m_handle, handle->GetHandle());
 
 					return handle;
+
 				}
 				else {
 					
@@ -923,7 +1068,24 @@ public:
 	}
 
 	
+	/* auto SetSockOpt(){
 
+		DWORD v = 0;
+		int length = sizeof(v);
+
+		auto isok = ::getsockopt(handle->GetHandle(), SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char *>(&v), &length);
+
+		if (isok == SOCKET_ERROR)
+		{
+			throw Win32SocketException{"get SO_KEEPALIVE opt error", WSAGetLastError()};
+		}
+		else
+		{
+			Print("get SO_KEEPALIVE opt value:", v);
+		}
+
+		return handle;
+	} */
 
 	~TcpSocketListen() {
 		
@@ -1314,6 +1476,21 @@ public:
 		return m_path;
 	}
 
+	std::u8string GetValue(const std::u8string& key){
+		
+		decltype(auto) dic = this->GetDic();
+
+		auto item = dic.find(key);
+
+		
+		if (item == dic.end()) {
+			return u8"";
+		}
+		else {
+			return std::u8string{ item->second};
+		}
+	}
+
 	bool GetRange(std::pair<size_t, std::pair<bool, size_t>>& out_value) {
 		
 		std::u8string key{ u8"Range" };
@@ -1372,48 +1549,12 @@ public:
 };
 
 
-class CreateReadOnlyFile : Delete_Base {
-
-	HANDLE m_handle;
-
-public:
-	CreateReadOnlyFile(const std::wstring& path) {
-		m_handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-
-		if (m_handle == INVALID_HANDLE_VALUE) {
-			throw Win32SysteamException{};
-		}
-	}
-
-	auto GetSize() {
-		LARGE_INTEGER size;
-		if (GetFileSizeEx(m_handle, &size)) {
-			return size.QuadPart;
-		}
-		else {
-			throw Win32SysteamException{};
-		}
-	}
-
-	auto GetHandle() {
-		return m_handle;
-	}
-
-	~CreateReadOnlyFile()
-	{
-		CloseHandle(m_handle);
-		Print("file close");
-	}
-};
-
-
 class HttpResponse : Delete_Base {
 
 	std::u8string m_header;
 
 protected:
-	virtual void Send_(std::shared_ptr<TcpSocket> handle, TRANSMIT_PACKETS_ELEMENT header) = 0;
-
+	virtual void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) = 0;
 public:
 
 	HttpResponse(size_t statusCode) : m_header() {
@@ -1492,15 +1633,11 @@ public:
 	
 		m_header.append(u8"\r\n");
 
-		TRANSMIT_PACKETS_ELEMENT item = {};
+		auto buf = reinterpret_cast<char*>(m_header.data());
 
-		item.dwElFlags = TP_ELEMENT_MEMORY;
+		auto size = ::Integer_cast<size_t, DWORD>(m_header.size());
 
-		item.pBuffer = reinterpret_cast<char*>(m_header.data());
-
-		item.cLength = m_header.size();
-
-		this->Send_(handle, item);
+		this->Send_(handle, buf, size);
 	
 	}
 
@@ -1516,22 +1653,18 @@ class HttpResponseStrContent : public HttpResponse {
 
 
 protected:
-	void Send_(std::shared_ptr<TcpSocket> handle, TRANSMIT_PACKETS_ELEMENT header) override {
+	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
 		
-		TRANSMIT_PACKETS_ELEMENT pack[2]{};
 
-		pack[0] = header;
+		WSABUF bufArray[2]{};
 
-		auto& item = pack[1];
+		bufArray[0].buf = header;
+		bufArray[0].len = size;
 
-		item.dwElFlags = TP_ELEMENT_MEMORY;
+		bufArray[1].buf =  reinterpret_cast<char*>(m_str.data());
+		bufArray[1].len = ::Integer_cast<size_t, DWORD>(m_str.size());
 
-		item.pBuffer = reinterpret_cast<char*>(m_str.data());
-
-		item.cLength = m_str.size();
-
-
-		handle->SendPack(pack, 2);
+		handle->Write(bufArray, 2);
 	}
 public:
 
@@ -1557,14 +1690,15 @@ public:
 	}
 
 protected:
-	void Send_(std::shared_ptr<TcpSocket> handle, TRANSMIT_PACKETS_ELEMENT header) override {
+	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size)  override {
 		
-		TRANSMIT_PACKETS_ELEMENT pack[1]{};
+		WSABUF buf ={};
 
-		pack[0] = header;
+		buf.buf = header;
 
+		buf.len = size;
 
-		handle->SendPack(pack, 1);
+		handle->Write(&buf, 1);
 	}
 
 };
@@ -1602,26 +1736,41 @@ class HttpResponseFileContent : public HttpResponse {
 	}
 
 protected:
-	void Send_(std::shared_ptr<TcpSocket> handle, TRANSMIT_PACKETS_ELEMENT header) override {
-		
-		TRANSMIT_PACKETS_ELEMENT pack[2]{};
+	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
 
-		pack[0] = header;
+		if (!true)
+		{
 
+			TRANSMIT_PACKETS_ELEMENT pack[2]{};
 
-		auto& item = pack[1];
+			auto &v = pack[0];
 
-		item.dwElFlags = TP_ELEMENT_FILE;
+			v.dwElFlags = TP_ELEMENT_MEMORY;
 
-		item.hFile = m_file->GetHandle();
+			v.pBuffer = header;
+			v.cLength = size;
 
-		item.nFileOffset.QuadPart = m_start_range;
+			auto &item = pack[1];
 
-		item.cLength = m_length;
+			item.dwElFlags = TP_ELEMENT_FILE;
 
-		handle->SendPack(pack, 2);
+			item.hFile = m_file->GetHandle();
+
+			item.nFileOffset.QuadPart = m_start_range;
+
+			item.cLength = ::Integer_cast<size_t, DWORD>(m_length);
+
+			handle->SendPack(pack, 2);
+		}
+		else
+		{
+			
+			handle->Write(header, size);
+
+			handle->WriteFile(*m_file, m_start_range, ::Integer_cast<size_t, DWORD>(m_length));
+
+		}
 	}
-
 
 
 public:
@@ -1663,7 +1812,7 @@ public:
 	
 
 
-		Print("start:", start, "end:", end, "length:", length, "v:",v, "fileSize:", m_fileSize);
+		//Print("start:", start, "end:", end, "length:", length, "v:",v, "fileSize:", m_fileSize);
 		m_start_range = start;
 
 		m_end_range = end;
@@ -1964,6 +2113,10 @@ public:
 
 		::Fiber::SwitchMain();
 
+		if(is_close){
+			throw ArgumentException{"MyEventQuery main switch call return but class is close"};
+		}
+
 		if(m_query.size() != 0){
 			auto v = std::move(m_query.front());
 			m_query.pop_front();
@@ -1998,7 +2151,7 @@ public:
 
 };
 
-void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest> request, std::wstring& folderPath){
+void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::wstring& folderPath){
 	
 	auto path = UTF8::GetWideChar(request->GetPath());
 	path =  folderPath + path;
@@ -2060,59 +2213,22 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest> req
 }
 
 
-
-void ResponseLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyEventQuery<std::unique_ptr<HttpReqest>>> query, std::wstring folderPath){
-	
-	try
-	{
-		while (true)
-		{
-			auto request = query->Wait();
-
-			Response(handle, std::move(request), folderPath);
-
-		}	
-	}
-	catch (Win32SysteamException& e) {
-		Print(e.what()); 
-	}
-	catch (HttpReqest::FormatException& e) {
-		Print("request format error:", e.what());
-	}
-	catch (::SystemException& e) {
-		Print("SystemException :", e.what());
-	}
-	
-	handle->Close();
-}
-
 void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
 
-	auto query = std::make_shared<MyEventQuery<std::unique_ptr<HttpReqest>>>();
+	
 	try {
 		int n = 0;
 
-		
-		::Fiber::Create(ResponseLoop, handle, query, folderPath);
 		while (true)
 		{
+
 			auto request = HttpReqest::Read(handle);
-			Print("request read over");
-			query->Set(std::move(request));
 			
-				
+			Response(handle, request, folderPath);
 			n++;
-			TCP_INFO_v0 info ={};
 
-			handle->GetTcpInfo(info);
-			Print(n,  ":    re use link", "send bytes count:", info.BytesOut, "event query size:", query->Size());
-
-			
+			Print(n, "re use link");
 		}
-		
-
-		
-		
 	}
 	catch (Win32SysteamException& e) {
 		Print(e.what()); 
@@ -2123,9 +2239,6 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
 	catch (::SystemException& e) {
 		Print("SystemException :", e.what());
 	}
-
-	query->Close();
-	handle->Close();
 }
 
 
@@ -2141,7 +2254,7 @@ void Accpet() {
 	{
 		auto handle = lis.Accept();
 
-		handle->SetKeepAlive();
+		//handle->SetKeepAlive();
 		Print("new connect");
 		Fiber::Create(RequestLoop, handle, Info::GetFolderPath());
 	}

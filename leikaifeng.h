@@ -242,6 +242,10 @@ public:
 			throw new Win32SysteamException{};
 		}
 	}
+
+	static std::string GetStdOut(std::u8string& v){
+		return ::UTF8::GetMultiByte(::UTF8::GetWideChar(v));
+	}
 };
 
 
