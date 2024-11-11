@@ -1,5 +1,6 @@
 ﻿#define _WIN32_WINNT _WIN32_WINNT_WIN8
 #define NTDDI_VERSION NTDDI_WIN8
+#include <limits>
 #include <iostream>
 #include <algorithm>
 #include <string>
@@ -214,6 +215,11 @@ private:
 
 	inline static std::wstring s_folderPath;
 
+	inline static int32_t s_on_run_sendfile_count;
+
+	constexpr static int32_t MAX_ON_RUN_SENDFILE_COUNT=2;
+
+
 	static void InitializationWSA() {
 		WSADATA data;
 
@@ -237,6 +243,24 @@ private:
 	
 public:
 	
+	
+	static void InitializationSendFileCount(){
+		s_on_run_sendfile_count=0;
+	}
+
+	static void AddSendFileCount(){
+		s_on_run_sendfile_count+=1;
+	}
+
+	static void SubSendFileCount(){
+		s_on_run_sendfile_count-=1;
+	}
+
+	static bool CanUseSendFile(){
+		return s_on_run_sendfile_count < MAX_ON_RUN_SENDFILE_COUNT;
+	}
+
+
 	static void SetFolderPath(std::wstring& path){
 		s_folderPath = path;
 	}
@@ -272,6 +296,8 @@ public:
 		Info::InitializationPort();
 
 		Info::InitializationMap();
+
+		Info::InitializationSendFileCount();
 	}
 
 	static void AddToIoCompletionPort(HANDLE fileHandle) {
@@ -785,9 +811,9 @@ public:
 		overlapped.other = GetCurrentFiber();
 		// TF_USE_SYSTEM_THREAD  TF_USE_KERNEL_APC
 
-		Print("TransmitPackets start");
+		
 		auto isok = Info::GetTransmitPackets()(m_handle, packs, count, 0, &overlapped, TF_USE_SYSTEM_THREAD);
-		Print("TransmitPackets end");
+	
 		if (isok) {
 			WSAExit("send pack syn over");
 		}
@@ -799,7 +825,9 @@ public:
 			}
 			else {
 				Print("TransmitPackets switch start");
+				Info::AddSendFileCount();
 				Fiber::SwitchMain();
+				Info::SubSendFileCount();
 				Print("TransmitPackets switch end");
 				DWORD count;
 
@@ -1707,6 +1735,13 @@ protected:
 
 class HttpResponseFileContent : public HttpResponse {
 
+	constexpr static size_t BAO_LIU_ZI_JIE_COUNT = 1024*1024*8;
+
+	constexpr static size_t MAX_SEND_LENGTH = std::numeric_limits<int32_t>::max()-BAO_LIU_ZI_JIE_COUNT;
+	//constexpr static size_t MAX_SEND_LENGTH = 5112660345;
+
+	constexpr static size_t IF_USE_SEND_OR_SENDFILE_COUNT = 104857600;
+
 	std::unique_ptr<CreateReadOnlyFile> m_file;
 
 
@@ -1738,9 +1773,11 @@ class HttpResponseFileContent : public HttpResponse {
 protected:
 	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
 
-		if (!true)
-		{
+		auto length = ::Integer_cast<size_t, DWORD>(m_length);
 
+		if (length > IF_USE_SEND_OR_SENDFILE_COUNT && Info::CanUseSendFile())
+		{
+			Print("use send file");
 			TRANSMIT_PACKETS_ELEMENT pack[2]{};
 
 			auto &v = pack[0];
@@ -1758,16 +1795,16 @@ protected:
 
 			item.nFileOffset.QuadPart = m_start_range;
 
-			item.cLength = ::Integer_cast<size_t, DWORD>(m_length);
+			item.cLength = length;
 
 			handle->SendPack(pack, 2);
 		}
 		else
 		{
-			
+			Print("use send buffer");
 			handle->Write(header, size);
 
-			handle->WriteFile(*m_file, m_start_range, ::Integer_cast<size_t, DWORD>(m_length));
+			handle->WriteFile(*m_file, m_start_range, length);
 
 		}
 	}
@@ -1784,10 +1821,7 @@ public:
 
 	}
 
-
-	constexpr static size_t MAX_SEND_LENGTH = 16777216;
-	//constexpr static size_t MAX_SEND_LENGTH = 5112660345;
-
+	
 	void SetRange(size_t start, size_t end) {
 
 		if(end >= m_fileSize){

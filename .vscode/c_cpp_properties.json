@@ -1,15 +1,14 @@
 {
-    "configurations": [
-      {
-        "name": "Linux",
-        "includePath": ["${workspaceFolder}/**"],
-        "defines": [],
-        "compilerPath": "/usr/bin/x86_64-w64-mingw32-g++",
-        "cStandard": "c11",
-        "cppStandard": "c++20",
-        "intelliSenseMode": "linux-gcc-x64"
-      }
-    ],
-    "version": 4
-  }
-  
+  "configurations": [
+    {
+      "name": "msys",
+      "includePath": ["${workspaceFolder}/**"],
+      "defines": [],
+      "compilerPath": "C:/Users/PC/AppData/Local/Programs/msys2/ucrt64/bin/g++",
+      "cStandard": "c11",
+      "cppStandard": "c++20",
+      "intelliSenseMode": "windows-gcc-x64"
+    }
+  ],
+  "version": 4
+}
