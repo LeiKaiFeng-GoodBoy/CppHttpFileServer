@@ -9,6 +9,7 @@
 #include <memory>
 #include <queue>
 #include <unordered_map>
+#include <thread>
 
 #define WIN32_LEAN_AND_MEAN   
 #include <windows.h>
@@ -338,6 +339,11 @@ public:
 	}
 
 	static Fiber& GetThis(){
+
+		if(s_value == nullptr){
+			Exit("fiber * is null");
+		}
+
 		return *s_value;
 	}
 
@@ -434,6 +440,7 @@ private:
 
 		while (true)
 		{
+			
 			Fiber::GetThis().Fiber_Func();
 
 
@@ -550,6 +557,10 @@ public:
 		Fiber::s_value= this;
 
 		Fiber::Convert();
+
+		if(Fiber::s_value != this){
+			Exit("convert fiber thread local data not eq");
+		}
 
 		Fiber::Create(func, value...);
 
@@ -2014,17 +2025,11 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
 }
 
 
-void Accpet(std::wstring path) {
+void Accpet(TcpSocketListen* lis, std::wstring path) {
 	
-	TcpSocketListen lis{};
-	
-	lis.Bind(IPEndPoint(0, 0, 0, 0, 80));
-
-	lis.Listen(16);
-
 	while (true)
 	{
-		auto handle = lis.Accept();
+		auto handle = lis->Accept();
 
 		//handle->SetKeepAlive();
 		Print("new connect");
@@ -2032,6 +2037,14 @@ void Accpet(std::wstring path) {
 	}
 
 }
+
+void AddAccpet(TcpSocketListen* lis, std::wstring path){
+
+	auto fiber = new Fiber{};
+	fiber->Start(Accpet,lis, path);
+
+}
+
 
 int main(int argc, char *argv[]) {
 	if(argc != 2){
@@ -2045,7 +2058,27 @@ int main(int argc, char *argv[]) {
 	auto wpath = ::UTF8::GetWideChar(path);
 	std::replace(wpath.begin(), wpath.end(), L'\\', L'/');
 	Info::Initialization();
-	auto fiber = new Fiber{};
-	fiber->Start(Accpet, wpath);
 
+
+	auto fiber = new Fiber{};
+	fiber->Start([](std::wstring path){
+		TcpSocketListen lis{};
+	
+		lis.Bind(IPEndPoint(0, 0, 0, 0, 80));
+
+		lis.Listen(16);
+
+
+
+		std::thread t1{AddAccpet, &lis, path};
+		std::thread t2{AddAccpet, &lis, path};
+		std::thread t3{AddAccpet, &lis, path};
+
+
+		Accpet(&lis, path);
+
+	}, wpath);
+
+	
+	
 }
