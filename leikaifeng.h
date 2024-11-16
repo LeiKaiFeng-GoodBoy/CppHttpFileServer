@@ -93,6 +93,19 @@ public:
 		return GetWideChar(s, CP_ACP);
 	}
 
+	static std::string GetMultiByteFromUTF8(const std::string& s){
+
+		auto wp = GetWideCharFromUTF8(s);
+
+		return GetMultiByte(wp);
+	}
+
+
+	static std::wstring GetWideCharFromUTF8(const std::string& s){
+
+		return GetWideChar(s, CP_UTF8);
+	}
+
 	static std::wstring GetWideChar(const std::string& s, int codePage){
 
 		auto buffer = reinterpret_cast<const char*>(s.data());
@@ -101,6 +114,8 @@ public:
 
 		return GetWideChar(buffer, size, codePage);
 	}
+
+
 
 	static std::wstring GetWideChar(const std::u8string& s){
 		auto buffer = reinterpret_cast<const char*>(s.data());
@@ -150,7 +165,12 @@ public:
 	static std::u8string GetUTF8(const std::wstring& s) {
 		std::u8string ret_s{};
 
-		GetMultiByte(s, CP_UTF8, [&](int n)-> char*{
+		auto buffer = s.data();
+
+		auto size = static_cast<int>(s.size());
+
+
+		GetMultiByte(buffer, size, CP_UTF8, [&](int n)-> char*{
 
 			ret_s.resize(static_cast<size_t>(n));
 			return  reinterpret_cast<char*>(ret_s.data());
@@ -162,7 +182,11 @@ public:
 	static std::string GetMultiByte(const std::wstring& s){
 		std::string ret_s{};
 
-		GetMultiByte(s, CP_ACP, [&](int n)-> char*{
+		auto buffer = s.data();
+
+		auto size = static_cast<int>(s.size());
+
+		GetMultiByte(buffer, size, CP_ACP, [&](int n)-> char*{
 
 			ret_s.resize(static_cast<size_t>(n));
 			return ret_s.data();
@@ -171,14 +195,11 @@ public:
 		return ret_s;
 	}
 
-	static void GetMultiByte(const std::wstring& s, int codePage, std::function<char*(int)> func) {
+	
+	static void GetMultiByte(const wchar_t* buffer, int size, int codePage, std::function<char*(int)> func) {
 
 		
 		auto flag = codePage != CP_UTF8 ? 0: WC_ERR_INVALID_CHARS;
-
-		auto buffer = s.data();
-
-		auto size = static_cast<int>(s.size());
 
 		if (size < 0) {
 

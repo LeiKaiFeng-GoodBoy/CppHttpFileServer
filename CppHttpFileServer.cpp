@@ -215,11 +215,6 @@ private:
 
 	inline static std::wstring s_folderPath;
 
-	inline static int32_t s_on_run_sendfile_count;
-
-	constexpr static int32_t MAX_ON_RUN_SENDFILE_COUNT=2;
-
-
 	static void InitializationWSA() {
 		WSADATA data;
 
@@ -243,23 +238,6 @@ private:
 	
 public:
 	
-	
-	static void InitializationSendFileCount(){
-		s_on_run_sendfile_count=0;
-	}
-
-	static void AddSendFileCount(){
-		s_on_run_sendfile_count+=1;
-	}
-
-	static void SubSendFileCount(){
-		s_on_run_sendfile_count-=1;
-	}
-
-	static bool CanUseSendFile(){
-		return s_on_run_sendfile_count < MAX_ON_RUN_SENDFILE_COUNT;
-	}
-
 
 	static void SetFolderPath(std::wstring& path){
 		s_folderPath = path;
@@ -297,7 +275,6 @@ public:
 
 		Info::InitializationMap();
 
-		Info::InitializationSendFileCount();
 	}
 
 	static void AddToIoCompletionPort(HANDLE fileHandle) {
@@ -370,6 +347,12 @@ public:
 	auto Get() const {
 		return m_value;
 	}
+};
+
+
+class OverLappedEx : public OVERLAPPED {
+public:
+	LPVOID other;
 };
 
 
@@ -544,14 +527,55 @@ public:
 
 		::DeleteFiber(fiber);
 	}
+
+	template <typename... TS>
+	static void Start(Fiber::FiberFuncType<TS...> func, TS... value)
+	{
+
+		Info::Initialization();
+
+		Fiber::Convert();
+
+		Fiber::Create(func, value...);
+
+		std::array<OVERLAPPED_ENTRY, 32> buffer{};
+
+		DWORD count;
+
+		while (true)
+		{
+			if (TRUE != GetQueuedCompletionStatusEx(Info::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, true))
+			{
+				Exit("get io error");
+			}
+			else
+			{
+				for (DWORD i = 0; i < count; i++)
+				{
+					auto &item = buffer[i];
+
+					auto flag = static_cast<IOPortFlag>(item.lpCompletionKey);
+
+					if (flag == IOPortFlag::FiberSwitch)
+					{
+
+						Fiber::Switch(static_cast<OverLappedEx *>(item.lpOverlapped)->other);
+					}
+					else if (flag == IOPortFlag::FiberCreate)
+					{
+
+						Fiber::Switch(item.lpOverlapped);
+					}
+					else
+					{
+						Fiber::Delete(item.lpOverlapped);
+					}
+				}
+			}
+		}
+	}
 };
 
-
-
-class OverLappedEx : public OVERLAPPED {
-public:
-	LPVOID other;
-};
 
 
 class CreateReadOnlyFile : Delete_Base {
@@ -636,42 +660,6 @@ public:
 };
 
 
-typedef enum _TCPSTATE {
-  TCPSTATE_CLOSED,
-  TCPSTATE_LISTEN,
-  TCPSTATE_SYN_SENT,
-  TCPSTATE_SYN_RCVD,
-  TCPSTATE_ESTABLISHED,
-  TCPSTATE_FIN_WAIT_1,
-  TCPSTATE_FIN_WAIT_2,
-  TCPSTATE_CLOSE_WAIT,
-  TCPSTATE_CLOSING,
-  TCPSTATE_LAST_ACK,
-  TCPSTATE_TIME_WAIT,
-  TCPSTATE_MAX
-} TCPSTATE;
-
-typedef struct _TCP_INFO_v0 {
-  TCPSTATE State;
-  ULONG    Mss;
-  ULONG64  ConnectionTimeMs;
-  BOOLEAN  TimestampsEnabled;
-  ULONG    RttUs;
-  ULONG    MinRttUs;
-  ULONG    BytesInFlight;
-  ULONG    Cwnd;
-  ULONG    SndWnd;
-  ULONG    RcvWnd;
-  ULONG    RcvBuf;
-  ULONG64  BytesOut;
-  ULONG64  BytesIn;
-  ULONG    BytesReordered;
-  ULONG    BytesRetrans;
-  ULONG    FastRetrans;
-  ULONG    DupAcksIn;
-  ULONG    TimeoutEpisodes;
-  UCHAR    SynRetrans;
-} TCP_INFO_v0, *PTCP_INFO_v0;
 
 class TcpSocket : Delete_Base {
 	SOCKET m_handle;
@@ -802,98 +790,6 @@ public:
 
 	}
 
-
-	void SendPack(LPTRANSMIT_PACKETS_ELEMENT packs, DWORD count) {
-		this->OnClose_Throw();
-		
-		OverLappedEx overlapped = {};
-		
-		overlapped.other = GetCurrentFiber();
-		// TF_USE_SYSTEM_THREAD  TF_USE_KERNEL_APC
-
-		
-		auto isok = Info::GetTransmitPackets()(m_handle, packs, count, 0, &overlapped, TF_USE_SYSTEM_THREAD);
-	
-		if (isok) {
-			WSAExit("send pack syn over");
-		}
-		else {
-			auto e = WSAGetLastError();
-
-			if (e != WSA_IO_PENDING) {
-				throw Win32SocketException{ static_cast<DWORD>(e) };
-			}
-			else {
-				Print("TransmitPackets switch start");
-				Info::AddSendFileCount();
-				Fiber::SwitchMain();
-				Info::SubSendFileCount();
-				Print("TransmitPackets switch end");
-				DWORD count;
-
-				DWORD flag;
-
-				if (WSAGetOverlappedResult(m_handle, &overlapped, &count, false, &flag)) {
-
-					return;
-				}
-				else {
-
-					throw Win32SocketException{ "SendPack",  static_cast<DWORD>(WSAGetLastError())};
-				}
-
-			}
-		}
-	}
-
-
-	auto GetTcpInfo(TCP_INFO_v0& tcpInfo){
-		this->OnClose_Throw();
-
-
-		DWORD ver = 0;
-		DWORD length =0;
-		auto isok = ::WSAIoctl(
-			m_handle, SIO_TCP_INFO,
-			&ver, sizeof(ver),
-			&tcpInfo, sizeof(tcpInfo),&length,
-			nullptr, nullptr);
-
-		if(isok == SOCKET_ERROR){
-			throw Win32SocketException("tcp_info error", WSAGetLastError());
-		}
-		else{
-			Print("get tcp_info ok");
-		}
-	}
-
-
-	auto SetKeepAlive(){
-		this->OnClose_Throw();
-
-
-		tcp_keepalive v = {};
-
-		v.onoff = 1;
-
-		v.keepalivetime = 5000;
-
-		v.keepaliveinterval = 1000;
-		DWORD length =0;
-		auto isok = ::WSAIoctl(
-			m_handle,SIO_KEEPALIVE_VALS,
-			&v, sizeof(v),
-			nullptr,0,&length,
-			nullptr, nullptr);
-
-
-		if(isok == SOCKET_ERROR){
-			throw Win32SocketException("tcp_keepalive error", WSAGetLastError());
-		}
-		else{
-			Print("set tcp_keepalive ok");
-		}
-	}
 
 	ULONG Read(char* buffer, ULONG size) {
 
@@ -1120,51 +1016,6 @@ public:
 		::closesocket(m_handle);
 	}
 };
-
-
-template<typename ...TS>
-void Start(Fiber::FiberFuncType<TS...> func, TS ...value) {
-
-	Info::Initialization();
-
-	Fiber::Convert();
-
-
-	Fiber::Create(func, value...);
-
-
-	std::array<OVERLAPPED_ENTRY, 32> buffer{};
-	
-	DWORD count;
-
-	while (true)
-	{
-		if (TRUE != GetQueuedCompletionStatusEx(Info::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, true)) {
-			Exit("get io error");
-		}
-		else {
-			for (DWORD i = 0; i < count; i++)
-			{
-				auto& item = buffer[i];
-				
-				auto flag = static_cast<IOPortFlag>(item.lpCompletionKey);
-
-				if (flag == IOPortFlag::FiberSwitch) {
-					
-					Fiber::Switch(static_cast<OverLappedEx*>(item.lpOverlapped)->other);
-
-				}
-				else if(flag == IOPortFlag::FiberCreate) {
-				
-					Fiber::Switch(item.lpOverlapped);
-				}
-				else {
-					Fiber::Delete(item.lpOverlapped);
-				}
-			}
-		}
-	}
-}
 
 
 class Url {
@@ -1740,8 +1591,6 @@ class HttpResponseFileContent : public HttpResponse {
 	constexpr static size_t MAX_SEND_LENGTH = std::numeric_limits<int32_t>::max()-BAO_LIU_ZI_JIE_COUNT;
 	//constexpr static size_t MAX_SEND_LENGTH = 5112660345;
 
-	constexpr static size_t IF_USE_SEND_OR_SENDFILE_COUNT = 104857600;
-
 	std::unique_ptr<CreateReadOnlyFile> m_file;
 
 
@@ -1775,38 +1624,10 @@ protected:
 
 		auto length = ::Integer_cast<size_t, DWORD>(m_length);
 
-		if (length > IF_USE_SEND_OR_SENDFILE_COUNT && Info::CanUseSendFile())
-		{
-			Print("use send file");
-			TRANSMIT_PACKETS_ELEMENT pack[2]{};
+		Print("use send buffer");
+		handle->Write(header, size);
 
-			auto &v = pack[0];
-
-			v.dwElFlags = TP_ELEMENT_MEMORY;
-
-			v.pBuffer = header;
-			v.cLength = size;
-
-			auto &item = pack[1];
-
-			item.dwElFlags = TP_ELEMENT_FILE;
-
-			item.hFile = m_file->GetHandle();
-
-			item.nFileOffset.QuadPart = m_start_range;
-
-			item.cLength = length;
-
-			handle->SendPack(pack, 2);
-		}
-		else
-		{
-			Print("use send buffer");
-			handle->Write(header, size);
-
-			handle->WriteFile(*m_file, m_start_range, length);
-
-		}
+		handle->WriteFile(*m_file, m_start_range, length);
 	}
 
 
@@ -2088,103 +1909,6 @@ public:
 
 };
 
-template<typename T>
-class MyEventQuery{
-
-private:
-	std::deque<T> m_query;
-
-	HANDLE m_wait_fiblr_handle;
-	bool is_set_handle;
-	bool is_close;
-
-	auto PostMain(){
-		if(is_set_handle){
-			
-			is_set_handle=false;
-			
-			
-			::Fiber::PostMain(m_wait_fiblr_handle);
-
-			
-		}
-		
-	}
-
-	auto OnClose_Throw(){
-		if(is_close){
-			throw ArgumentException{"MyEventQuery is close can not use"};
-		}
-	}
-
-public:
-
-	MyEventQuery(): m_wait_fiblr_handle(nullptr), is_set_handle(false), is_close(false){
-
-	}
-
-	auto Size(){
-		this->OnClose_Throw();
-
-		return m_query.size();
-	}
-
-	auto Wait(){
-		this->OnClose_Throw();
-
-		if(m_query.size() != 0){
-			auto v = std::move(m_query.front());
-			m_query.pop_front();
-			return v;
-		}
-
-		if(is_set_handle){
-			throw ArgumentException{"MyEventQuery handle is not post main"};
-		}
-
-		m_wait_fiblr_handle = ::GetCurrentFiber();
-		is_set_handle = true;
-
-		::Fiber::SwitchMain();
-
-		if(is_close){
-			throw ArgumentException{"MyEventQuery main switch call return but class is close"};
-		}
-
-		if(m_query.size() != 0){
-			auto v = std::move(m_query.front());
-			m_query.pop_front();
-			return v;
-		}
-
-		throw ArgumentException{"MyEventQuery can not has item"};
-	}
-
-
-	auto Set(T v){
-		this->OnClose_Throw();
-
-		m_query.push_back(std::move(v));
-
-		this->PostMain();
-	}
-
-	void Close(){
-		is_close= true;
-
-		this->PostMain();
-	}
-
-	~MyEventQuery(){
-
-
-		this->Close();
-
-		Print("close MyEventQuery");
-	}
-
-};
-
 void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::wstring& folderPath){
 	
 	auto path = UTF8::GetWideChar(request->GetPath());
@@ -2308,5 +2032,5 @@ int main(int argc, char *argv[]) {
 	std::replace(wpath.begin(), wpath.end(), L'\\', L'/');
 	
 	Info::SetFolderPath(wpath);
-	Start(Accpet);
+	Fiber::Start(Accpet);
 }
