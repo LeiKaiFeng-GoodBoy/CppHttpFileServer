@@ -20,11 +20,6 @@
 #include <wininet.h>
 #include <mstcpip.h>
 #include "leikaifeng.h"
-#define SIO_TCP_INFO _WSAIORW(IOC_VENDOR,39)
-
-//#pragma comment(lib,"Ws2_32.lib")
-//#pragma comment(lib,"Dnsapi.lib")
-//#pragma comment(lib,"Wininet.lib")
 
 template<typename TIn, typename TOut>
 TOut Integer_cast(TIn v){
@@ -144,6 +139,7 @@ enum class IOPortFlag : ULONG_PTR {
 	FiberDelete
 };
 
+class Fiber;
 
 class Info {
 
@@ -191,29 +187,13 @@ private:
 		}
 	}
 
-	static auto CreateIoCompletionPort() {
-		auto handle = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
-
-		if (handle == nullptr) {
-			Exit("create Io Completion Port error");
-
-			throw Win32SysteamException{};
-		}
-		else {
-			return handle;
-		}
-	}
-
-
-	inline static HANDLE s_portHandle;
+	
 
 	inline static LPFN_ACCEPTEX s_acceptex;
 
 	inline static LPFN_CONNECTEX s_connectex;
 
 	inline static LPFN_TRANSMITPACKETS s_transmitpackets;
-
-	inline static std::wstring s_folderPath;
 
 	static void InitializationWSA() {
 		WSADATA data;
@@ -231,21 +211,8 @@ private:
 		s_transmitpackets = Info::GetFunctionAddress<LPFN_TRANSMITPACKETS>(WSAID_TRANSMITPACKETS);
 	}
 
-	static void InitializationPort() {
-		s_portHandle = Info::CreateIoCompletionPort();
-	}
-
 	
 public:
-	
-
-	static void SetFolderPath(std::wstring& path){
-		s_folderPath = path;
-	}
-
-	static const std::wstring& GetFolderPath(){
-		return s_folderPath;
-	}
 
 	static auto& GetContentTypeMap() {
 
@@ -271,29 +238,18 @@ public:
 
 		Info::InitializationWSA();
 
-		Info::InitializationPort();
-
 		Info::InitializationMap();
 
+		auto& v = IsCallInitialization();
+
+		v = true;
+
 	}
 
-	static void AddToIoCompletionPort(HANDLE fileHandle) {
-		auto handle = ::CreateIoCompletionPort(fileHandle, s_portHandle, static_cast<ULONG_PTR>(IOPortFlag::FiberSwitch), 0);
-		if (handle == nullptr) {
-			Exit("add Io Completion Port error");
-		}
-	}
+	static bool& IsCallInitialization(){
+		static bool v;
 
-	static void PostToIoCompletionPort(IOPortFlag flag, LPVOID value) {
-		if (0 == ::PostQueuedCompletionStatus(s_portHandle, 0, static_cast<ULONG_PTR>(flag), static_cast<LPOVERLAPPED>(value))) {
-			Exit("post io Completion Port error");
-		}
-	}
-
-	
-
-	static auto GetPortHandle() {
-		return s_portHandle;
+		return v;
 	}
 
 	static auto GetAcceptEx() {
@@ -356,11 +312,34 @@ public:
 };
 
 
-class Fiber {
+
+class Fiber : Delete_Base {
+	
+private:
+	class IData;
+	inline thread_local static Fiber* s_value;
+
 	
 public:
 	template<typename ...TS>
 	using FiberFuncType = std::decay_t<void(TS...)>;
+
+	HANDLE m_io_over_port;
+
+	std::deque<std::unique_ptr<IData>> m_data_queue;
+
+	std::deque<LPVOID> m_fiber_queue;
+
+	LPVOID m_main_fiber;
+
+	Fiber():m_io_over_port{}, m_data_queue{}, m_fiber_queue{},  m_main_fiber{}{
+
+		m_io_over_port = Fiber::CreateIoCompletionPort();
+	}
+
+	static Fiber& GetThis(){
+		return *s_value;
+	}
 
 private:
 
@@ -388,27 +367,40 @@ private:
 	};
 
 
-	static auto& GetPQueue() {
-		static std::deque<std::unique_ptr<IData>> queue{};
+	
+	static HANDLE CreateIoCompletionPort() {
+		auto handle = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
 
-		return queue;
+		if (handle == nullptr) {
+			Exit("create Io Completion Port error");
+
+			throw Win32SysteamException{};
+		}
+		else {
+			return handle;
+		}
 	}
 
-	static auto& GetFiberQueue() {
-		static std::deque<LPVOID> queue{};
 
-		return queue;
+
+	auto& GetPQueue() {
+		return m_data_queue;
+	}
+
+	auto& GetFiberQueue() {
+		return m_fiber_queue;
+	}
+
+	auto GetPortHandle(){
+		return m_io_over_port;
 	}
 
 	constexpr static size_t FIBER_COUNT = 8;
 
 
-
-	inline static LPVOID s_fiber;
-
-	static void Fiber_Func() {
+	void Fiber_Func() {
 		
-		decltype(auto) pqueue = Fiber::GetPQueue();
+		decltype(auto) pqueue = this->GetPQueue();
 
 
 		auto p = std::move(pqueue.front());
@@ -442,40 +434,59 @@ private:
 
 		while (true)
 		{
-			Fiber::Fiber_Func();
+			Fiber::GetThis().Fiber_Func();
 
 
-			decltype(auto) queue = Fiber::GetFiberQueue();
+			decltype(auto) queue =Fiber::GetThis().GetFiberQueue();
 			
 			if (queue.size() > Fiber::FIBER_COUNT)
 			{
 
-				Info::PostToIoCompletionPort(IOPortFlag::FiberDelete, GetCurrentFiber());
+				 Fiber::GetThis().PostToIoCompletionPort(IOPortFlag::FiberDelete, GetCurrentFiber());
 
 			}
 			else {
 				queue.push_back(GetCurrentFiber());
 			}
 
-			Fiber::SwitchMain();
+			Fiber::GetThis().SwitchMain();
 		}
 		
 	}
 
 public:
-	static void Convert() {
+
+
+	
+	
+	void AddToIoCompletionPort(HANDLE fileHandle) {
+		auto handle = ::CreateIoCompletionPort(fileHandle, m_io_over_port, static_cast<ULONG_PTR>(IOPortFlag::FiberSwitch), 0);
+		if (handle == nullptr) {
+			Exit("add Io Completion Port error");
+		}
+	}
+
+	void PostToIoCompletionPort(IOPortFlag flag, LPVOID value) {
+		if (0 == ::PostQueuedCompletionStatus(m_io_over_port, 0, static_cast<ULONG_PTR>(flag), static_cast<LPOVERLAPPED>(value))) {
+			Exit("post io Completion Port error");
+		}
+	}
+
+	
+
+	void Convert() {
 		auto handle = ::ConvertThreadToFiberEx(nullptr, FIBER_FLAG_FLOAT_SWITCH);
 
 		if (handle == nullptr) {
 			Exit("Convert To Fiber Error");
 		}
 		else {
-			s_fiber = handle;
+			m_main_fiber = handle;
 		}
 	}
 
 	template <typename ...TS>
-	static void Create(FiberFuncType<TS...> func, TS ...value) {
+	void Create(FiberFuncType<TS...> func, TS ...value) {
 		
 		//这个地方如果参数是万能引用会导致包装参数的类型字段也是引用
 		
@@ -499,19 +510,19 @@ public:
 			}
 		}
 		
-		Info::PostToIoCompletionPort(IOPortFlag::FiberCreate, handle);
+		Fiber::PostToIoCompletionPort(IOPortFlag::FiberCreate, handle);
 	}
 
-	static void PostMain(LPVOID fiber){
+	void PostMain(LPVOID fiber){
 
-		::Info::PostToIoCompletionPort(IOPortFlag::FiberCreate, fiber);
+		Fiber::PostToIoCompletionPort(IOPortFlag::FiberCreate, fiber);
 	}
 
-	static void SwitchMain() {
-		Fiber::Switch(s_fiber);
+	void SwitchMain() {
+		Fiber::Switch(m_main_fiber);
 	}
 
-	static void Switch(LPVOID fiber) {
+	void Switch(LPVOID fiber) {
 		if (fiber == GetCurrentFiber()) {
 			Exit("Switch Fiber error");
 		}
@@ -519,8 +530,8 @@ public:
 		::SwitchToFiber(fiber);
 	}
 
-	static void Delete(LPVOID fiber) {
-		if (fiber == s_fiber) {
+	void Delete(LPVOID fiber) {
+		if (fiber == m_main_fiber) {
 			Exit("delete fiber error");
 
 		}
@@ -529,10 +540,14 @@ public:
 	}
 
 	template <typename... TS>
-	static void Start(Fiber::FiberFuncType<TS...> func, TS... value)
+	void Start(Fiber::FiberFuncType<TS...> func, TS... value)
 	{
+		
+		if(Info::IsCallInitialization() == false){
+			Exit("can not call Initialization");
+		}
 
-		Info::Initialization();
+		Fiber::s_value= this;
 
 		Fiber::Convert();
 
@@ -544,7 +559,7 @@ public:
 
 		while (true)
 		{
-			if (TRUE != GetQueuedCompletionStatusEx(Info::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, true))
+			if (TRUE != GetQueuedCompletionStatusEx(Fiber::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, true))
 			{
 				Exit("get io error");
 			}
@@ -589,7 +604,7 @@ public:
 		if (m_handle == INVALID_HANDLE_VALUE) {
 			throw Win32SysteamException{};
 		}
-		Info::AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
+		Fiber::GetThis().AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
 	}
 
 	auto GetSize() {
@@ -623,8 +638,7 @@ public:
 			throw Win32SysteamException{"read file error:", e};
 		}
 
-		
-		Fiber::SwitchMain();
+		Fiber::GetThis().SwitchMain();
 	
 		DWORD count;
 
@@ -684,7 +698,7 @@ class TcpSocket : Delete_Base {
 			throw Win32SocketException{ static_cast<DWORD>(e) };
 		}
 
-		Fiber::SwitchMain();
+		Fiber::GetThis().SwitchMain();
 
 
 		DWORD count;
@@ -706,7 +720,7 @@ public:
 		m_handle = Info::CreateIPv4TcpSocket();
 
 
-		Info::AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
+		Fiber::GetThis().AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
 	}
 
 	auto Write(char* buffer, DWORD len){
@@ -736,7 +750,7 @@ public:
 			throw Win32SocketException{ static_cast<DWORD>(e) };
 		}
 		
-		Fiber::SwitchMain();
+		Fiber::GetThis().SwitchMain();
 	
 		DWORD count;
 		
@@ -838,7 +852,7 @@ public:
 				throw Win32SocketException{ static_cast<DWORD>(value) };
 			}
 			else {
-				Fiber::SwitchMain();
+				Fiber::GetThis().SwitchMain();
 
 				DWORD count;
 				
@@ -912,7 +926,7 @@ public:
 
 		m_handle = Info::CreateIPv4TcpSocket();
 
-		Info::AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
+		Fiber::GetThis().AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
 	}
 
 	void Bind(const IPEndPoint& endPoint) {
@@ -970,7 +984,7 @@ public:
 				throw Win32SocketException{ static_cast<DWORD>(value) };
 			}
 			else {
-				Fiber::SwitchMain();
+				Fiber::GetThis().SwitchMain();
 				
 				DWORD count;
 				
@@ -2000,7 +2014,7 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
 }
 
 
-void Accpet() {
+void Accpet(std::wstring path) {
 	
 	TcpSocketListen lis{};
 	
@@ -2014,7 +2028,7 @@ void Accpet() {
 
 		//handle->SetKeepAlive();
 		Print("new connect");
-		Fiber::Create(RequestLoop, handle, Info::GetFolderPath());
+		Fiber::GetThis().Create(RequestLoop, handle, path);
 	}
 
 }
@@ -2030,7 +2044,8 @@ int main(int argc, char *argv[]) {
 
 	auto wpath = ::UTF8::GetWideChar(path);
 	std::replace(wpath.begin(), wpath.end(), L'\\', L'/');
-	
-	Info::SetFolderPath(wpath);
-	Fiber::Start(Accpet);
+	Info::Initialization();
+	auto fiber = new Fiber{};
+	fiber->Start(Accpet, wpath);
+
 }

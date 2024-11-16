@@ -1,6 +1,4 @@
 #pragma once
-#define _WIN32_WINNT _WIN32_WINNT_WIN8
-#define NTDDI_VERSION NTDDI_WIN8
 #ifndef _LEIKAIFENG
 #define _LEIKAIFENG
 
@@ -11,8 +9,8 @@
 #include <windows.h>
 #include <shlwapi.h>
 //#define WC_ERR_INVALID_CHARS 0x0080
-#define URL_ESCAPE_AS_UTF8              0x00040000
-#define URL_UNESCAPE_AS_UTF8            URL_ESCAPE_AS_UTF8
+//#define URL_ESCAPE_AS_UTF8              0x00040000
+//#define URL_UNESCAPE_AS_UTF8            URL_ESCAPE_AS_UTF8
 void Print() {
 	std::cout << std::endl;
 }
