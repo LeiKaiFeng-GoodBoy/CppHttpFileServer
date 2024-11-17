@@ -137,7 +137,9 @@ enum class IOPortFlag : ULONG_PTR {
 	
 	FiberCreate,
 	
-	FiberDelete
+	FiberDelete,
+
+	FiberActionAdd
 };
 
 class Fiber;
@@ -493,11 +495,29 @@ public:
 	}
 
 	template <typename ...TS>
+	void Create_ThreadSafe(FiberFuncType<TS...> func, TS ...value) {
+		
+		std::unique_ptr<IData> p = std::make_unique<Data<TS...>>(func, value...);
+
+		auto pp = new std::unique_ptr<IData>{std::move(p)};
+
+
+
+		Fiber::PostToIoCompletionPort(IOPortFlag::FiberActionAdd, pp);
+	}
+
+	template <typename ...TS>
 	void Create(FiberFuncType<TS...> func, TS ...value) {
 		
 		//这个地方如果参数是万能引用会导致包装参数的类型字段也是引用
-		
-		Fiber::GetPQueue().push_back(std::make_unique<Data<TS...>>(func, value...));
+
+		std::unique_ptr<IData> p = std::make_unique<Data<TS...>>(func, value...);
+		this->Create2(std::move(p));
+
+	}
+	void Create2(std::unique_ptr<IData> p)
+	{
+		Fiber::GetPQueue().push_back(std::move(p));
 
 		decltype(auto) fiberqueue = Fiber::GetFiberQueue();
 
@@ -567,10 +587,14 @@ public:
 		std::array<OVERLAPPED_ENTRY, 32> buffer{};
 
 		DWORD count;
-
+		auto id = ::GetCurrentThreadId();
 		while (true)
 		{
-			if (TRUE != GetQueuedCompletionStatusEx(Fiber::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, true))
+			
+		
+			auto res = GetQueuedCompletionStatusEx(Fiber::GetPortHandle(), buffer.data(), static_cast<ULONG>(buffer.size()), &count, INFINITE, true);
+			
+			if (TRUE !=res)
 			{
 				Exit("get io error");
 			}
@@ -592,9 +616,21 @@ public:
 
 						Fiber::Switch(item.lpOverlapped);
 					}
-					else
+					else if (flag == IOPortFlag::FiberDelete)
 					{
 						Fiber::Delete(item.lpOverlapped);
+					}
+					else if (flag == IOPortFlag::FiberActionAdd)
+					{
+						
+						auto p = reinterpret_cast<std::unique_ptr<IData>*>(item.lpOverlapped);
+
+						this->Create2(std::move(*p));
+
+						delete p;
+					}
+					else{
+						Exit("can not define Fiber flag");
 					}
 				}
 			}
@@ -729,7 +765,11 @@ public:
 
 	TcpSocket() :is_close(false){
 		m_handle = Info::CreateIPv4TcpSocket();
+		Fiber::GetThis().AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
+	}
 
+	TcpSocket(SOCKET s) :is_close(false), m_handle(s){
+		
 
 		Fiber::GetThis().AddToIoCompletionPort(reinterpret_cast<HANDLE>(m_handle));
 	}
@@ -1037,6 +1077,53 @@ public:
 	} */
 
 	~TcpSocketListen() {
+		
+		::closesocket(m_handle);
+	}
+};
+
+
+
+class TcpSocketListenSync : Delete_Base {
+	SOCKET m_handle;
+
+public:
+
+	TcpSocketListenSync() {
+
+		m_handle = Info::CreateIPv4TcpSocket();
+	}
+
+	void Bind(const IPEndPoint& endPoint) {
+
+		TcpSocket::Bind(m_handle, endPoint);
+		
+	}
+
+
+	void Listen(int backlog) {
+		if (SOCKET_ERROR == ::listen(m_handle, backlog)) {
+			
+			throw Win32SocketException{ "listen" };
+		}
+	}
+
+	SOCKET Accept() {
+
+		sockaddr_in client;
+        int clientsize = sizeof(client);
+        auto connct = ::accept(m_handle, (SOCKADDR *)&client, &clientsize);
+
+        if (connct == INVALID_SOCKET)
+        {
+            Exit("accept socket error", WSAGetLastError());
+        }
+
+		return connct;
+	}
+
+	
+	~TcpSocketListenSync() {
 		
 		::closesocket(m_handle);
 	}
@@ -2024,27 +2111,12 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::wstring folderPath){
 	}
 }
 
+void NewAcceptAction(SOCKET s, std::wstring path){
+	auto handle = std::make_shared<TcpSocket>(s);
 
-void Accpet(TcpSocketListen* lis, std::wstring path) {
-	
-	while (true)
-	{
-		auto handle = lis->Accept();
-
-		//handle->SetKeepAlive();
-		Print("new connect");
-		Fiber::GetThis().Create(RequestLoop, handle, path);
-	}
+	Fiber::GetThis().Create(RequestLoop, handle, path);
 
 }
-
-void AddAccpet(TcpSocketListen* lis, std::wstring path){
-
-	auto fiber = new Fiber{};
-	fiber->Start(Accpet,lis, path);
-
-}
-
 
 int main(int argc, char *argv[]) {
 	if(argc != 2){
@@ -2060,25 +2132,44 @@ int main(int argc, char *argv[]) {
 	Info::Initialization();
 
 
-	auto fiber = new Fiber{};
-	fiber->Start([](std::wstring path){
-		TcpSocketListen lis{};
+	TcpSocketListenSync lis{};
 	
-		lis.Bind(IPEndPoint(0, 0, 0, 0, 80));
+	lis.Bind(IPEndPoint(0, 0, 0, 0, 80));
 
-		lis.Listen(16);
+	lis.Listen(16);
 
+	std::vector<Fiber*> f_v{};
 
+	std::vector<std::thread> t_v{};
 
-		std::thread t1{AddAccpet, &lis, path};
-		std::thread t2{AddAccpet, &lis, path};
-		std::thread t3{AddAccpet, &lis, path};
+	size_t count = 3;
 
+	for (size_t i = 0; i < count; i++)
+	{
+		auto f = new Fiber{};
 
-		Accpet(&lis, path);
+		std::thread t{[](auto fiber){
+			fiber->Start([](){});
+			
+		}, f};
 
-	}, wpath);
+		f_v.push_back(f);
 
+		t_v.push_back(std::move(t));
+	}
+	
+
+	size_t n=0;
+	while (true)
+	{
+		n++;
+
+		auto s = lis.Accept();
+
+		auto index = n% count;
+
+		f_v[index]->Create_ThreadSafe(NewAcceptAction, s, wpath);
+	}
 	
 	
 }
