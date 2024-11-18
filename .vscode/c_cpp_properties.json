@@ -1,8 +1,10 @@
 {
   "configurations": [
     {
-      "name": "msys",
-      "includePath": ["${workspaceFolder}/**"],
+      "name": "msys2",
+      "includePath": ["${workspaceFolder}/**", 
+      "${workspaceFolder}/../bit7z-master/include/bit7z/**",
+      "${workspaceFolder}/../CppHttpFileServer/**"],
       "defines": [],
       "compilerPath": "C:/Users/PC/AppData/Local/Programs/msys2/ucrt64/bin/g++",
       "cStandard": "c11",
