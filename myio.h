@@ -235,6 +235,7 @@ public:
 		map.emplace(L".ts", u8"video/vnd.iptvforum.ttsmpeg2");
 		map.emplace(L".jpg", u8"image/jpeg");
 		map.emplace(L".jpeg", u8"image/jpeg");
+		map.emplace(L".png", u8"image/png");
 	}
 
 
@@ -1640,6 +1641,38 @@ public:
 	}
 };
 
+class HttpResponseBufferContent:public HttpResponse{
+
+private:
+	std::vector<byte> m_buf;
+
+
+protected:
+	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
+		
+
+		WSABUF bufArray[2]{};
+
+		bufArray[0].buf = header;
+		bufArray[0].len = size;
+
+		bufArray[1].buf =  reinterpret_cast<char*>(m_buf.data());
+		bufArray[1].len = ::Integer_cast<size_t, DWORD>(m_buf.size());
+
+		handle->Write(bufArray, 2);
+	}
+public:
+
+	HttpResponseBufferContent(size_t statusCode, const std::wstring& exName, std::vector<byte> buf) : HttpResponse(statusCode),m_buf(std::move(buf)) {
+
+		this->SetContentType(exName);
+		this->SetContentLength(m_buf.size());
+
+	}
+
+};
+
+
 class HttpResponseStrContent : public HttpResponse {
 
 	std::u8string m_str;
@@ -1958,22 +1991,19 @@ public:
 
 
 class Html {
-public:
+private:
+	std::wstring m_file;
 
-	class Data{
-		public:
-			bool IsFolder;
-			const wchar_t* Path;
-	};
+	std::wstring m_folder;
 
-	template<bool ISFOLDER>
-	static void Add(std::wstring& s, const wchar_t* path) {
+
+	void Add(bool isFolder, std::wstring& s, const std::wstring& path, const std::wstring& name) {
 		
 		s.append(L"<li><a href=\"");
-		std::wstring encodeUrl = ::UTF8::UrlEncode(path);
-		s.append(encodeUrl.data());
+		std::wstring encodeUrl = ::UTF8::UrlEncode(path.c_str());
+		s.append(encodeUrl);
 
-		if constexpr (ISFOLDER) {
+		if (isFolder) {
 
 			s.append(L"/\">");
 
@@ -1984,41 +2014,39 @@ public:
 
 		}
 
-		s.append(path);
+		s.append(name);
 
 		s.append(L"</a></li>");
 	}
+	
 
-	static std::wstring GetHtml(std::function<bool(Data&)> func) {
+public:
 
-		std::wstring file{};
+	Html():m_file(), m_folder(){
 
-		std::wstring folder{};
+	}
 
-		
-		Html::Data data{};
-		while (func(data))
-		{
-			
-			if (data.IsFolder) {
-
-				Add<true>(folder, data.Path);
-
-			}
-			else {
-				Add<false>(file, data.Path);
-			}
+	void Add(bool isFolder,  const std::wstring& path, const std::wstring& name){
+		if(isFolder){
+			this->Add(isFolder, m_folder, path, name);
 		}
+		else{
+			this->Add(isFolder, m_file, path, name);
+		}
+	}
 
+	std::wstring GetHtml() {
+
+	
 		std::wstring ret{};
 		
 		ret.append(L"<!DOCTYPE html><html lang=\"zh-cn\" xmlns=\"http://www.w3.org/1999/xhtml\"><head><meta charset=\"utf-8\" /><title>文件和文件</title></head><body><div><div><ul>");
 		
-		ret.append(folder);
+		ret.append(m_folder);
 		
 		ret.append(L"</ul></div><div><ul>");
 		
-		ret.append(file);
+		ret.append(m_file);
 		
 		ret.append(L"</ul></div></div></body></html>");
 

@@ -53,24 +53,17 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& re
 	
 		EnumFileFolder eff{path};
 		EnumFileFolder::Data data{};
+		Html html{};
+		while (eff.Get(data))
+		{
+			std::wstring name{data.Path()};
 
-		std::wstring html_string = Html::GetHtml([&eff, &data](Html::Data& v){
-			
-			auto res = eff.Get(data);
-			if(res){
-				v.IsFolder = data.IsFolder();
+			html.Add(data.IsFolder(), name, name);
+		}
+		
 
-				v.Path = data.Path();
 
-				return true;
-			}
-			else{
-				return false;
-			}
-			
-		});
-
-		HttpResponseStrContent response{ 200,  html_string};
+		HttpResponseStrContent response{ 200,  html.GetHtml()};
 
 		response.Send(handle);
 	}
