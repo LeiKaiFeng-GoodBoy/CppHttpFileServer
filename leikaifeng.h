@@ -132,7 +132,11 @@ public:
 		if (size < 0) {
 			throw Win32SysteamException{ "size overflow" };
 		}
-		else {
+		else if(size ==0){
+			return std::wstring{};
+		} 
+		else
+		{
 
 			auto length = MultiByteToWideChar(codePage, FLAG, buffer, size, nullptr, 0);
 
@@ -202,6 +206,9 @@ public:
 		if (size < 0) {
 
 			throw Win32SysteamException{ "size overflow" };
+		}
+		else if(size == 0){
+			return;
 		}
 		else {
 

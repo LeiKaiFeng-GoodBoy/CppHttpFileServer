@@ -1325,13 +1325,15 @@ public:
 private:
 	constexpr static size_t BUFFER_SIZE = 4096;
 
-
+	//这两个变量目的是为了给map中的view保存缓存生存期
 	std::u8string m_buffer;
-	
+	std::u8string m_firstLine;
+
+
 	std::u8string m_path;
 	
 	std::unordered_map<std::u8string_view, std::u8string_view> m_dic;
-	
+	std::unordered_map<std::u8string_view, std::u8string_view> m_queryArgs;
 	static std::u8string Path(std::u8string_view s) {
 
 		auto first = s.find(u8' ');
@@ -1454,10 +1456,74 @@ private:
 		}
 	}
 
+	static
+		std::u8string_view
+		ParseQuery(std::u8string_view s,
+				   std::unordered_map<std::u8string_view, std::u8string_view> &dic)
+	{
+
+		auto index = s.find(u8"?");
+
+		if (index == std::remove_reference_t<decltype(s)>::npos)
+		{
+
+			return s.substr(0, s.size());
+		}
+
+		std::u8string_view path = s.substr(0, index);
+
+		s.remove_prefix(index + 1);
+
+		while (true)
+		{
+
+			auto index = s.find(u8"&");
+			std::u8string_view query_args{};
+			if (index == std::remove_reference_t<decltype(s)>::npos)
+			{
+
+				query_args = s.substr(0, s.size());
+				s.remove_prefix(s.size());
+			}
+			else
+			{
+				query_args = s.substr(0, index);
+				s.remove_prefix(index + 1);
+			}
+
+			if (query_args.size() != 0)
+			{
+				auto index = query_args.find(u8"=");
+
+				if (index == std::remove_reference_t<decltype(s)>::npos)
+				{
+
+					auto key = query_args.substr(0, query_args.size());
+
+					auto value = std::u8string_view{};
+
+					dic.emplace(key, value);
+				}
+				else
+				{
+					auto key = query_args.substr(0, index);
+					query_args.remove_prefix(index + 1);
+					auto value = query_args.substr(0, query_args.size());
+
+					dic.emplace(key, value);
+				}
+			}
+
+			if (s.size() == 0)
+			{
+				return path;
+			}
+		}
+	}
 
 public:
 	
-	HttpReqest() : m_buffer(), m_path(), m_dic() {
+	HttpReqest() : m_buffer(), m_path(), m_firstLine(), m_dic(), m_queryArgs() {
 
 		m_buffer.resize(HttpReqest::BUFFER_SIZE);
 	}
@@ -1483,6 +1549,21 @@ public:
 		else {
 			return std::u8string{ item->second};
 		}
+	}
+
+	std::u8string GetQueryValue(const std::u8string& key){
+		auto& dic = this->m_queryArgs;
+
+		auto item = dic.find(key);
+
+		
+		if (item == dic.end()) {
+			return u8"";
+		}
+		else {
+			return std::u8string{ item->second};
+		}
+
 	}
 
 	bool GetRange(std::pair<size_t, std::pair<bool, size_t>>& out_value) {
@@ -1514,6 +1595,10 @@ public:
 
 		auto& dic = ret->m_dic;
 
+		auto& queryArgs = ret->m_queryArgs;
+
+		auto& firstLine = ret->m_firstLine;
+
 		auto length = socket->Peek(reinterpret_cast<char*>(buffer.data()), static_cast<ULONG>(buffer.size()));
 		
 		std::u8string_view view{ buffer.data(),static_cast<size_t>(length) };
@@ -1526,7 +1611,13 @@ public:
 		}
 		else {
 
-			path = HttpReqest::Path(value);
+			//path = HttpReqest::Path(value);
+			
+			firstLine = HttpReqest::Path(value);
+
+			auto pathview = ParseQuery(firstLine, queryArgs);
+
+			path = std::u8string{pathview};
 			
 			while (HttpReqest::Find(view, value))
 			{

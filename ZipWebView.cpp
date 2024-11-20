@@ -8,27 +8,106 @@
 class MyZipReader2 : Delete_Base{
 
 private:
+
+    class MyNeedData{
+        public:
+            uint32_t index;
+            size_t size;
+            std::wstring path;
+            std::wstring exname;
+        MyNeedData(uint32_t index,
+            size_t size,
+            std::wstring path,
+            std::wstring exname):
+            index(index), size(size),
+            path(std::move(path)),
+            exname(std::move(exname)){
+
+            }
+    };
+
     bit7z::Bit7zLibrary m_lib;
-    bit7z::BitArchiveReader m_arc;
+    std::wstring m_path;
+    std::unique_ptr<bit7z::BitArchiveReader> m_arc;
+
+    std::unordered_map<uint32_t, MyNeedData> m_data; 
 public:
     //初始化的顺序很重要
-    MyZipReader2(const std::wstring& filePath, const std::wstring& dllPath):
+    MyZipReader2(const std::wstring& dllPath):
      m_lib(bit7z::to_tstring(dllPath)),
-     m_arc(m_lib, bit7z::to_tstring(filePath), bit7z::BitFormat::Zip)
+     m_path(),
+     m_arc(),
+     m_data()
     {
        
     }
 
 
-    auto& Get(){
-        return m_arc;
+
+    void OpenFile(const std::wstring& path){
+
+        if(path == m_path){
+            return;
+        }
+
+        m_path= path;
+
+        m_arc = std::make_unique<bit7z::BitArchiveReader>(m_lib, 
+        bit7z::to_tstring(path), 
+        bit7z::BitFormat::Zip);
+        
+        m_data.clear();
+
+        try{
+            auto arc_items = m_arc->items();
+            for (auto &item : arc_items)
+            {
+                if(item.isDir()){
+
+                }
+                else{
+                    
+                    auto index = item.index();
+
+                    auto path = item.path();
+
+                    auto size = item.size();
+
+                    auto exname = item.extension();
+
+                    m_data.emplace(index, MyNeedData{index, size, 
+                        UTF8::GetWideCharFromUTF8(path),
+                         UTF8::GetWideCharFromUTF8(exname),
+                    });
+                }
+
+            }
+        }
+        catch (const bit7z::BitException &ex)
+        {
+
+            Exit(ex.what());
+        }
+
+        
+
     }
 
-    auto GetBytes(size_t index){
+    auto GetBytes(uint32_t index, std::wstring& exname){
         
+        auto v = m_data.find(index);
+
+        if(v == m_data.end()){
+
+            exname = L"";
+            return std::vector<bit7z::byte_t>{};
+        }
+
+        exname = v->second.exname;
+
         try{
             std::vector<bit7z::byte_t> out{};
-            m_arc.extractTo(out, ::Integer_cast<size_t, uint32_t>(index));
+            m_arc->extractTo(out, ::Integer_cast<size_t, uint32_t>(index));
             return std::move(out);
         }
         catch (const bit7z::BitException &ex)
@@ -41,55 +120,36 @@ public:
         
     }
 
-    void GetFileNameAndIndex(std::function<void(uint32_t, std::wstring&)> func){
+    void GetFileNameAndIndex(std::function<void(uint32_t, const std::wstring&)> func){
 
-        try{
-            auto arc_items = m_arc.items();
-            for (auto &item : arc_items)
-            {
-                if(item.isDir()){
-
-                }
-                else{
-                    
-                    auto index = item.index();
-
-                    auto path = item.path();
-
-                    auto wpath = UTF8::GetWideCharFromUTF8(path);
-
-                    func(index, wpath);
-                }
-
-            }
-        }
-        catch (const bit7z::BitException &ex)
+        for (const auto& item: m_data)
         {
-
-            Print(ex.what());
+           func(item.second.index, item.second.path);
         }
-
         
     }
 
 };
 
-
-
-void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::shared_ptr<MyZipReader2> reader){
+void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::shared_ptr<MyZipReader2> reader, std::wstring& filePath){
 	
-	auto path = request->GetPath();
-    Print(UTF8::GetStdOut(path));
-   
-    if(path == u8"/"){
-        Html html {};
+	
+    std::filesystem::path path{filePath};
 
-        reader->GetFileNameAndIndex([&html](uint32_t index, std::wstring& name){
+    reader->OpenFile(filePath);
+
+    auto indexstring = request->GetQueryValue(u8"Index");
+
+
+    if(indexstring == u8""){
+         Html html {};
+
+        reader->GetFileNameAndIndex([&html](uint32_t index, const std::wstring& name){
 
             std::u8string path{};
             Number::ToString(path, index);
             auto wpath = UTF8::GetWideChar(path);
-
+            wpath.insert(0, L"?Index=");
             html.Add(false, wpath, name);
 
         });
@@ -102,19 +162,10 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& re
 
         return;
     }
-    
-    std::u8string_view view {path};
-    
-    if(view.size() < 2){
-        HttpResponse404 res404{};
-        res404.Send(handle);
 
-        return;
-    }
-    
     size_t index;
-	
-    if(!Number::Parse(view.substr(1, view.size()-1), index)){
+    std::u8string view{indexstring};
+    if(!Number::Parse(view, index)){
 
         HttpResponse404 res404{};
         res404.Send(handle);
@@ -124,17 +175,69 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& re
 
 
     Print(index);
+    std::wstring exname{};
+    auto buf = reader->GetBytes(static_cast<uint32_t>(index), exname);
+    exname.insert(0, L".");
 
-    auto buf = reader->GetBytes(index);
-
-    
-    HttpResponseBufferContent resbuf{200,L".png", std::move(buf)};
+    Print("exname", UTF8::GetMultiByte(exname));
+    HttpResponseBufferContent resbuf{200,exname, std::move(buf)};
 
     resbuf.Send(handle);
 }
 
 
-void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2> reader){
+
+void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::shared_ptr<MyZipReader2> reader, std::wstring& folderPath){
+	
+	auto path = UTF8::GetWideChar(request->GetPath());
+	path =  folderPath + path;
+	
+	auto isff = File::IsFileOrFolder(path);
+
+	if (isff.IsFile()) {
+
+        Response2(handle, request, reader, path);
+		
+
+	}
+	else if (isff.IsFolder()) {
+		
+		if (path.ends_with(L'/')) {
+			path += L'*';
+		}
+		else {
+			path += L"/*";
+		}
+	
+		EnumFileFolder eff{path};
+		EnumFileFolder::Data data{};
+		Html html{};
+		while (eff.Get(data))
+		{
+			std::wstring name{data.Path()};
+
+			html.Add(data.IsFolder(), name, name);
+		}
+		
+
+
+		HttpResponseStrContent response{ 200,  html.GetHtml()};
+
+		response.Send(handle);
+	}
+	else {
+		Print("path error   ", ::UTF8::GetMultiByte(path));
+		
+		HttpResponse404 response{};
+
+
+		response.Send(handle);
+	}
+}
+
+
+
+void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2> reader, std::wstring path){
 
 	
 	try {
@@ -145,7 +248,7 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2
 
 			auto request = HttpReqest::Read(handle);
 			
-			Response(handle, request, reader);
+			Response(handle, request, reader, path);
 			n++;
 
 			Print(n, "re use link");
@@ -173,17 +276,18 @@ int main(int argc, char *argv[]) {
 	std::string path{argv[1]};
 
 	auto wpath = ::UTF8::GetWideChar(path);
+   std::replace(wpath.begin(), wpath.end(), L'\\', L'/');
+
 	std::wstring dllpath{L"7z.dll"};
 
-    auto reader = std::make_shared<MyZipReader2>(wpath, dllpath);
-
+    auto reader = std::make_shared<MyZipReader2>(dllpath);
 
 
 	Info::Initialization();
 
     auto f = new Fiber{};
 
-    f->Start([](std::shared_ptr<MyZipReader2> p){
+    f->Start([](std::shared_ptr<MyZipReader2> p, std::wstring wpath){
 
         TcpSocketListen lis{};
         lis.Bind(IPEndPoint{0,0,0,0, 80});
@@ -193,10 +297,10 @@ int main(int argc, char *argv[]) {
         {
             auto connect = lis.Accept();
 
-            Fiber::GetThis().Create(RequestLoop, connect, p);
+            Fiber::GetThis().Create(RequestLoop, connect, p, wpath);
         }
         
 
 
-    }, reader);
+    }, reader, wpath);
 }
