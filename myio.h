@@ -221,7 +221,7 @@ public:
 
 	static auto& GetContentTypeMap() {
 
-		static std::unordered_map<std::wstring, std::u8string> map{};
+		static std::unordered_map<std::wstring_view, std::u8string_view> map{};
 
 		return map;
 	}
@@ -230,12 +230,51 @@ public:
 
 		decltype(auto) map = GetContentTypeMap();
 
+
 		map.emplace(L".html", u8"text/html");
-		map.emplace(L".mp4", u8"video/mp4");
-		map.emplace(L".ts", u8"video/vnd.iptvforum.ttsmpeg2");
+		map.emplace(L".htm", u8"text/html");
+		map.emplace(L".css", u8"text/css");
+		map.emplace(L".js", u8"application/javascript");
+		map.emplace(L".json", u8"application/json");
+		map.emplace(L".xml", u8"application/xml");
+		map.emplace(L".txt", u8"text/plain");
+
 		map.emplace(L".jpg", u8"image/jpeg");
 		map.emplace(L".jpeg", u8"image/jpeg");
 		map.emplace(L".png", u8"image/png");
+		map.emplace(L".gif", u8"image/gif");
+		map.emplace(L".bmp", u8"image/bmp");
+		map.emplace(L".svg", u8"image/svg+xml");
+		map.emplace(L".ico", u8"image/vnd.microsoft.icon");
+		map.emplace(L".webp", u8"image/webp");
+
+		map.emplace(L".mp3", u8"audio/mpeg");
+		map.emplace(L".wav", u8"audio/wav");
+		map.emplace(L".ogg", u8"audio/ogg");
+		map.emplace(L".m4a", u8"audio/mp4");
+		map.emplace(L".flac", u8"audio/flac");
+
+		map.emplace(L".mp4", u8"video/mp4");
+		map.emplace(L".mkv", u8"video/x-matroska");
+		map.emplace(L".webm", u8"video/webm");
+		map.emplace(L".avi", u8"video/x-msvideo");
+		map.emplace(L".mov", u8"video/quicktime");
+		map.emplace(L".flv", u8"video/x-flv");
+		map.emplace(L".ts", u8"video/vnd.iptvforum.ttsmpeg2");
+
+		map.emplace(L".pdf", u8"application/pdf");
+		map.emplace(L".zip", u8"application/zip");
+		map.emplace(L".rar", u8"application/vnd.rar");
+		map.emplace(L".7z", u8"application/x-7z-compressed");
+		map.emplace(L".tar", u8"application/x-tar");
+		map.emplace(L".gz", u8"application/gzip");
+		map.emplace(L".doc", u8"application/msword");
+		map.emplace(L".docx", u8"application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+		map.emplace(L".ppt", u8"application/vnd.ms-powerpoint");
+		map.emplace(L".pptx", u8"application/vnd.openxmlformats-officedocument.presentationml.presentation");
+		map.emplace(L".xls", u8"application/vnd.ms-excel");
+		map.emplace(L".xlsx", u8"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
 	}
 
 

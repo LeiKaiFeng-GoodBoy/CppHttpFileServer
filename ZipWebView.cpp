@@ -42,9 +42,31 @@ public:
        
     }
 
+    const bit7z::BitInFormat &detectRAR(const std::string &in_file)
+    {
 
+        try
+        {
+            bit7z::BitArchiveReader info(m_lib, in_file, bit7z::BitFormat::Rar);
+            // if BitArchiveInfo constructor did not throw an exception, the archive is RAR (< 5.0)!
+            return bit7z::BitFormat::Rar;
+        }
+        catch (const bit7z::BitException &)
+        {
+            /* the archive is not a RAR and if it is not even a RAR5,
+               the following line will throw an exception (not catched)! */
+            bit7z::BitArchiveReader info(m_lib, in_file, bit7z::BitFormat::Rar5);
+            return bit7z::BitFormat::Rar5;
+        }
+    }
 
-    void OpenFile(const std::wstring& path){
+    void OpenFile(const std::wstring& path, const bit7z::BitInFormat& format){
+        auto fv = &format;
+        auto u8path =  bit7z::to_tstring(path);
+        if((*fv) == bit7z::BitFormat::Rar){
+             fv = &detectRAR(u8path);
+        }
+
 
         if(path == m_path){
             return;
@@ -53,8 +75,8 @@ public:
         m_path= path;
 
         m_arc = std::make_unique<bit7z::BitArchiveReader>(m_lib, 
-        bit7z::to_tstring(path), 
-        bit7z::BitFormat::Zip);
+        u8path, 
+        *fv);
         
         m_data.clear();
 
@@ -131,12 +153,47 @@ public:
 
 };
 
+
+bool GetBitInFormat(const std::wstring& filePath, bit7z::BitInFormat const * * v){
+     std::filesystem::path path{filePath};
+
+    if(!path.has_extension()){
+        return false;
+    }
+    auto ex = path.extension();
+    
+    if(ex ==L".zip"){
+        *v = &bit7z::BitFormat::Zip;
+        return true;
+    }
+    else if(ex == L".rar"){
+        *v = &bit7z::BitFormat::Rar;
+        return true;
+    }
+    else if(ex == L".7z"){
+        *v = &bit7z::BitFormat::SevenZip;
+        return true;
+    }
+    else{
+
+        return false;
+    }
+    
+}
+
 void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::shared_ptr<MyZipReader2> reader, std::wstring& filePath){
 	
-	
-    std::filesystem::path path{filePath};
+    const bit7z::BitInFormat* v;
 
-    reader->OpenFile(filePath);
+    if(!GetBitInFormat(filePath, &v)){
+        HttpResponse404 res404{};
+        res404.Send(handle);
+
+        return;
+    }
+
+
+    reader->OpenFile(filePath, *v);
 
     auto indexstring = request->GetQueryValue(u8"Index");
 
@@ -187,9 +244,56 @@ void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& r
 
 
 
-void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::shared_ptr<MyZipReader2> reader, std::wstring& folderPath){
+void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& request, std::shared_ptr<MyZipReader2> reader, std::wstring& folderPath, std::wstring& appPath){
 	
 	auto path = UTF8::GetWideChar(request->GetPath());
+
+    
+    if(path.starts_with(L"/app")){
+        path = appPath +path.substr(4);
+
+        if(File::IsFileOrFolder(path).IsFile()){
+            
+		
+            std::pair<size_t, std::pair<bool, size_t>> range;
+
+            if (request->GetRange(range)) {
+                HttpResponseFileContent response{ 206, path };
+
+                if (range.second.first) {
+                    response.SetRange(range.first, range.second.second);
+                }
+                else {
+                    response.SetRange(range.first);
+                }
+
+                response.Send(handle);
+
+            }
+            else {
+
+                HttpResponseFileContent response{ 200, path };
+
+                response.SetRange();
+
+                response.Send(handle);
+
+            }
+
+        }
+        else{
+
+            HttpResponse404 res404{};
+            res404.Send(handle);
+
+        }
+
+
+
+        return;
+    }
+    
+
 	path =  folderPath + path;
 	
 	auto isff = File::IsFileOrFolder(path);
@@ -237,7 +341,7 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& re
 
 
 
-void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2> reader, std::wstring path){
+void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2> reader, std::wstring path, std::wstring apppath){
 
 	
 	try {
@@ -248,7 +352,7 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2
 
 			auto request = HttpReqest::Read(handle);
 			
-			Response(handle, request, reader, path);
+			Response(handle, request, reader, path, apppath);
 			n++;
 
 			Print(n, "re use link");
@@ -267,16 +371,22 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2
 
 
 int main(int argc, char *argv[]) {
-	if(argc != 2){
-		Exit("argce != 2");
+	if(argc != 3){
+		Exit("argce != 3,  args  app path, file path");
 
 		return 0;
 	}
 
-	std::string path{argv[1]};
+	
+    std::string apppath{argv[1]};
+
+    auto wapppath = ::UTF8::GetWideChar(apppath);
+    std::replace(wapppath.begin(), wapppath.end(), L'\\', L'/');
+
+    std::string path{argv[2]};
 
 	auto wpath = ::UTF8::GetWideChar(path);
-   std::replace(wpath.begin(), wpath.end(), L'\\', L'/');
+    std::replace(wpath.begin(), wpath.end(), L'\\', L'/');
 
 	std::wstring dllpath{L"7z.dll"};
 
@@ -287,7 +397,7 @@ int main(int argc, char *argv[]) {
 
     auto f = new Fiber{};
 
-    f->Start([](std::shared_ptr<MyZipReader2> p, std::wstring wpath){
+    f->Start([](std::shared_ptr<MyZipReader2> p, std::wstring wpath, std::wstring wapppath){
 
         TcpSocketListen lis{};
         lis.Bind(IPEndPoint{0,0,0,0, 80});
@@ -297,10 +407,10 @@ int main(int argc, char *argv[]) {
         {
             auto connect = lis.Accept();
 
-            Fiber::GetThis().Create(RequestLoop, connect, p, wpath);
+            Fiber::GetThis().Create(RequestLoop, connect, p, wpath, wapppath);
         }
         
 
 
-    }, reader, wpath);
+    }, reader, wpath, wapppath);
 }
