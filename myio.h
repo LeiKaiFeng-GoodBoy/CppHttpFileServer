@@ -860,9 +860,12 @@ public:
 	}
 
 	
-	auto WriteFile(CreateReadOnlyFile& file, size_t offset, DWORD count){
-		
-		
+	static void CopyTo(
+		std::function<uint32_t(char*, uint32_t, size_t)> readfunc, 
+		std::function<uint32_t(char*, uint32_t)> writefunc,
+		size_t offset, 
+		DWORD count){
+
 		const size_t SIZEBUFF = 2097152;
 		//const size_t SIZEBUFF = 8192;
 		auto buf = std::make_unique<char[]>(SIZEBUFF);
@@ -870,7 +873,7 @@ public:
 		while (count > 0)
 		{
 			
-			auto redCount = file.Read(buf.get(), SIZEBUFF, offset);
+			auto redCount = readfunc(buf.get(), SIZEBUFF, offset);
 
 			if(redCount ==0){
 				Print("file loop read 0");
@@ -884,7 +887,7 @@ public:
 				canSendCount =count;
 			}
 
-			auto n = this->Write(buf.get(), canSendCount);
+			auto n = writefunc(buf.get(), canSendCount);
 
 
 			count-=n;
@@ -892,10 +895,8 @@ public:
 			offset+=n;
 		}
 		
-
-
-
 	}
+
 
 
 	ULONG Read(char* buffer, ULONG size) {
@@ -1960,7 +1961,11 @@ protected:
 		Print("use send buffer");
 		handle->Write(header, size);
 
-		handle->WriteFile(*m_file, m_start_range, length);
+		TcpSocket::CopyTo(
+			[&file= m_file](auto buf, auto size, auto offset){return file->Read(buf, size, offset);},
+			[&soc= handle](auto buf, auto size){return soc->Write(buf, size);},
+			m_start_range,
+			length);
 	}
 
 public:
@@ -1988,16 +1993,48 @@ private:
 protected:
 	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
 		
+		auto length = ::Integer_cast<size_t, DWORD>(m_length);
 
-		WSABUF bufArray[2]{};
+		if(length < 1024*1024*8){
+			Print("ont send to data");
+			WSABUF bufArray[2]{};
 
-		bufArray[0].buf = header;
-		bufArray[0].len = size;
+			bufArray[0].buf = header;
+			bufArray[0].len = size;
 
-		bufArray[1].buf =  reinterpret_cast<char*>(m_buf->data() + m_start_range);
-		bufArray[1].len = ::Integer_cast<size_t, DWORD>(m_length);
+			bufArray[1].buf =  reinterpret_cast<char*>(m_buf->data() + m_start_range);
+			bufArray[1].len = length;
 
-		handle->Write(bufArray, 2);
+			handle->Write(bufArray, 2);
+		}
+		else{
+			Print("loop send to data");
+
+			handle->Write(header, size);
+
+			TcpSocket::CopyTo(
+				[&databuf= *m_buf](auto buf, auto size, auto offset){
+
+					auto canreadcount = databuf.size() - offset;
+
+					uint32_t res;
+					if(canreadcount <= size){
+						res =  static_cast<uint32_t>(canreadcount);
+					}
+					else{
+						res = size;
+					}
+
+					CopyMemory(buf, databuf.data()+offset, res);
+
+					return res;
+
+				},
+				[&soc= handle](auto buf, auto size){return soc->Write(buf, size);},
+				m_start_range,
+				length);
+		}
+		
 	}
 public:
 

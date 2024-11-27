@@ -13,32 +13,11 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& re
 
 	if (isff.IsFile()) {
 
+		HttpResponseFileContent response{path };
 		
-		
-		std::pair<size_t, std::pair<bool, size_t>> range;
+		response.SetRangeFromRequest(*request);
 
-		if (request->GetRange(range)) {
-			HttpResponseFileContent response{ 206, path };
-
-			if (range.second.first) {
-				response.SetRange(range.first, range.second.second);
-			}
-			else {
-				response.SetRange(range.first);
-			}
-
-			response.Send(handle);
-
-		}
-		else {
-
-			HttpResponseFileContent response{ 200, path };
-
-			response.SetRange();
-
-			response.Send(handle);
-
-		}
+		response.Send(handle);
 
 
 	}
