@@ -26,20 +26,26 @@ private:
             }
     };
 
+    constexpr static size_t MAXINDEX =  std::numeric_limits<size_t>::max(); 
+
     bit7z::Bit7zLibrary m_lib;
     std::wstring m_path;
     std::unique_ptr<bit7z::BitArchiveReader> m_arc;
 
     std::unordered_map<uint32_t, MyNeedData> m_data; 
+    std::shared_ptr<std::vector<byte>> m_fileData;
+    size_t m_upIndex;
 public:
     //初始化的顺序很重要
     MyZipReader2(const std::wstring& dllPath):
      m_lib(bit7z::to_tstring(dllPath)),
      m_path(),
      m_arc(),
-     m_data()
+     m_data(),
+     m_fileData(),
+     m_upIndex(MAXINDEX)
     {
-       
+       m_fileData = std::make_shared<std::vector<bit7z::byte_t>>();
     }
 
     const bit7z::BitInFormat &detectRAR(const std::string &in_file)
@@ -79,7 +85,7 @@ public:
         *fv);
         
         m_data.clear();
-
+        m_fileData = std::make_shared<std::vector<bit7z::byte_t>>();
         try{
             auto arc_items = m_arc->items();
             for (auto &item : arc_items)
@@ -122,15 +128,23 @@ public:
         if(v == m_data.end()){
 
             exname = L"";
-            return std::vector<bit7z::byte_t>{};
+            return std::make_shared<std::vector<bit7z::byte_t>>();
         }
 
         exname = v->second.exname;
 
+        if(m_upIndex == index){
+            return m_fileData;
+        }
+
+        m_upIndex=index;
+
+        m_fileData = std::make_shared<std::vector<bit7z::byte_t>>();
         try{
-            std::vector<bit7z::byte_t> out{};
-            m_arc->extractTo(out, ::Integer_cast<size_t, uint32_t>(index));
-            return std::move(out);
+            
+            m_arc->extractTo(*m_fileData, ::Integer_cast<size_t, uint32_t>(index));
+            
+            return m_fileData;
         }
         catch (const bit7z::BitException &ex)
         {
@@ -138,7 +152,7 @@ public:
             Print(ex.what());
         }
 
-        return std::vector<bit7z::byte_t>{};
+        return std::make_shared<std::vector<bit7z::byte_t>>();
         
     }
 
@@ -237,8 +251,8 @@ void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& r
     exname.insert(0, L".");
 
     Print("exname", UTF8::GetMultiByte(exname));
-    HttpResponseBufferContent resbuf{200,exname, std::move(buf)};
-
+    HttpResponseBufferContent resbuf{exname, buf};
+    resbuf.SetRangeFromRequest(*request);
     resbuf.Send(handle);
 }
 
@@ -254,31 +268,11 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& re
 
         if(File::IsFileOrFolder(path).IsFile()){
             
-		
-            std::pair<size_t, std::pair<bool, size_t>> range;
+		    HttpResponseFileContent response{ path };
+            
+            response.SetRangeFromRequest(*request);
 
-            if (request->GetRange(range)) {
-                HttpResponseFileContent response{ 206, path };
-
-                if (range.second.first) {
-                    response.SetRange(range.first, range.second.second);
-                }
-                else {
-                    response.SetRange(range.first);
-                }
-
-                response.Send(handle);
-
-            }
-            else {
-
-                HttpResponseFileContent response{ 200, path };
-
-                response.SetRange();
-
-                response.Send(handle);
-
-            }
+            response.Send(handle);
 
         }
         else{

@@ -1605,7 +1605,7 @@ public:
 
 	}
 
-	bool GetRange(std::pair<size_t, std::pair<bool, size_t>>& out_value) {
+	bool GetRange(std::pair<size_t, std::pair<bool, size_t>>& out_value) const {
 		
 		std::u8string key{ u8"Range" };
 
@@ -1771,38 +1771,6 @@ public:
 	}
 };
 
-class HttpResponseBufferContent:public HttpResponse{
-
-private:
-	std::vector<byte> m_buf;
-
-
-protected:
-	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
-		
-
-		WSABUF bufArray[2]{};
-
-		bufArray[0].buf = header;
-		bufArray[0].len = size;
-
-		bufArray[1].buf =  reinterpret_cast<char*>(m_buf.data());
-		bufArray[1].len = ::Integer_cast<size_t, DWORD>(m_buf.size());
-
-		handle->Write(bufArray, 2);
-	}
-public:
-
-	HttpResponseBufferContent(size_t statusCode, const std::wstring& exName, std::vector<byte> buf) : HttpResponse(statusCode),m_buf(std::move(buf)) {
-
-		this->SetContentType(exName);
-		this->SetContentLength(m_buf.size());
-
-	}
-
-};
-
-
 class HttpResponseStrContent : public HttpResponse {
 
 	std::u8string m_str;
@@ -1859,18 +1827,14 @@ protected:
 
 };
 
-
-
-class HttpResponseFileContent : public HttpResponse {
+class HttpResponseRangeContent : public HttpResponse {
 
 	constexpr static size_t BAO_LIU_ZI_JIE_COUNT = 1024*1024*8;
 
 	constexpr static size_t MAX_SEND_LENGTH = std::numeric_limits<int32_t>::max()-BAO_LIU_ZI_JIE_COUNT;
 	//constexpr static size_t MAX_SEND_LENGTH = 5112660345;
 
-	std::unique_ptr<CreateReadOnlyFile> m_file;
-
-
+protected:
 	size_t m_fileSize;
 
 	size_t m_start_range;
@@ -1879,45 +1843,22 @@ class HttpResponseFileContent : public HttpResponse {
 
 	size_t m_length;
 	
-	static std::wstring GetName(const std::wstring& path) {
-		auto index = path.rfind(L'.');
-
-		if (index == std::remove_reference_t< decltype(path)>::npos) {
-			return std::wstring{};
-		}
-		else {
-			return path.substr(index, path.size() - index);
-		}
-	}
-
 	void Set() {
 		this->SetContentLength(m_length);
 
 		this->SetContentRange(m_start_range, m_end_range, m_fileSize);
 	}
 
-protected:
-	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
-
-		auto length = ::Integer_cast<size_t, DWORD>(m_length);
-
-		Print("use send buffer");
-		handle->Write(header, size);
-
-		handle->WriteFile(*m_file, m_start_range, length);
-	}
-
 
 public:
 
-	HttpResponseFileContent(size_t statusCode, const std::wstring& path)
-		: HttpResponse(statusCode), m_file(std::make_unique<CreateReadOnlyFile>(path)) {
+	HttpResponseRangeContent(size_t contentSize)
+		: HttpResponse(206), m_fileSize(contentSize) {
 		
-		m_fileSize = m_file->GetSize();
-
-		this->SetContentType(HttpResponseFileContent::GetName(path));
-
+		
 	}
+
+
 
 	
 	void SetRange(size_t start, size_t end) {
@@ -1967,7 +1908,110 @@ public:
 
 		this->SetRange(0, m_fileSize - 1);
 	}
+
+	void SetRangeFromRequest(const HttpReqest& req){
+		std::pair<size_t, std::pair<bool, size_t>> range;
+
+		if (req.GetRange(range)) {
+			
+			if (range.second.first) {
+				this->SetRange(range.first, range.second.second);
+			}
+			else {
+				this->SetRange(range.first);
+			}
+
+		}
+		else {
+
+		
+			this->SetRange();
+
+		}
+	}
+
 };
+
+
+
+class  HttpResponseFileContent : public HttpResponseRangeContent{
+	
+	
+	std::unique_ptr<CreateReadOnlyFile> m_file;
+
+
+	static std::wstring GetName(const std::wstring& path) {
+		auto index = path.rfind(L'.');
+
+		if (index == std::remove_reference_t< decltype(path)>::npos) {
+			return std::wstring{};
+		}
+		else {
+			return path.substr(index, path.size() - index);
+		}
+	}
+
+
+protected:
+	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
+
+		auto length = ::Integer_cast<size_t, DWORD>(m_length);
+
+		Print("use send buffer");
+		handle->Write(header, size);
+
+		handle->WriteFile(*m_file, m_start_range, length);
+	}
+
+public:
+
+	HttpResponseFileContent(const std::wstring& path)
+		: HttpResponseRangeContent(0), m_file() {
+		
+		m_file = std::make_unique<CreateReadOnlyFile>(path);
+
+		m_fileSize = m_file->GetSize();
+
+		this->SetContentType(HttpResponseFileContent::GetName(path));
+
+	}
+
+};
+
+
+class HttpResponseBufferContent:public HttpResponseRangeContent{
+
+private:
+	std::shared_ptr<std::vector<byte>> m_buf;
+
+
+protected:
+	void Send_(std::shared_ptr<TcpSocket> handle, char* header, DWORD size) override {
+		
+
+		WSABUF bufArray[2]{};
+
+		bufArray[0].buf = header;
+		bufArray[0].len = size;
+
+		bufArray[1].buf =  reinterpret_cast<char*>(m_buf->data() + m_start_range);
+		bufArray[1].len = ::Integer_cast<size_t, DWORD>(m_length);
+
+		handle->Write(bufArray, 2);
+	}
+public:
+
+	HttpResponseBufferContent(const std::wstring& exName,std::shared_ptr<std::vector<byte>> buf) : HttpResponseRangeContent(0),m_buf(buf) {
+
+		m_fileSize = m_buf->size();
+
+		this->SetContentType(exName);
+		
+	}
+
+};
+
+
 
 
 class EnumFileFolder : Delete_Base {
