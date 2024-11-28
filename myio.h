@@ -42,6 +42,49 @@ void WSAExit(const std::string& message) {
 }
 
 
+class MyFunc{
+public:
+	static void CopyTo(
+		std::function<uint32_t(char*, uint32_t, size_t)> readfunc, 
+		std::function<uint32_t(char*, uint32_t)> writefunc,
+		size_t offset, 
+		DWORD count){
+
+		const size_t SIZEBUFF = 2097152;
+		//const size_t SIZEBUFF = 8192;
+		auto buf = std::make_unique<char[]>(SIZEBUFF);
+		
+		while (count > 0)
+		{
+			
+			auto redCount = readfunc(buf.get(), SIZEBUFF, offset);
+
+			if(redCount ==0){
+				Print("file loop read 0");
+				return;
+			}
+			DWORD canSendCount =0;
+			if(count > redCount){
+				canSendCount=redCount;
+			}
+			else{
+				canSendCount =count;
+			}
+
+			auto n = writefunc(buf.get(), canSendCount);
+
+
+			count-=n;
+
+			offset+=n;
+		}
+		
+	}
+
+
+
+};
+
 class Win32SocketException : public Win32SysteamException {
 public:
 	using Win32SysteamException::Win32SysteamException;
@@ -860,44 +903,6 @@ public:
 	}
 
 	
-	static void CopyTo(
-		std::function<uint32_t(char*, uint32_t, size_t)> readfunc, 
-		std::function<uint32_t(char*, uint32_t)> writefunc,
-		size_t offset, 
-		DWORD count){
-
-		const size_t SIZEBUFF = 2097152;
-		//const size_t SIZEBUFF = 8192;
-		auto buf = std::make_unique<char[]>(SIZEBUFF);
-		
-		while (count > 0)
-		{
-			
-			auto redCount = readfunc(buf.get(), SIZEBUFF, offset);
-
-			if(redCount ==0){
-				Print("file loop read 0");
-				return;
-			}
-			DWORD canSendCount =0;
-			if(count > redCount){
-				canSendCount=redCount;
-			}
-			else{
-				canSendCount =count;
-			}
-
-			auto n = writefunc(buf.get(), canSendCount);
-
-
-			count-=n;
-
-			offset+=n;
-		}
-		
-	}
-
-
 
 	ULONG Read(char* buffer, ULONG size) {
 
@@ -1236,7 +1241,7 @@ class Url {
 
 				if ((index + SIZE) <= size) {
 
-					ret += Url::GetCharFrom(&buffer[index]);
+					ret.push_back(Url::GetCharFrom(&buffer[index]));
 
 					index += SIZE;
 				}
@@ -1245,7 +1250,8 @@ class Url {
 				}
 			}
 			else {
-				ret += buffer[index];
+				
+				ret.push_back(buffer[index]);
 
 				index++;
 			}
@@ -1418,7 +1424,7 @@ private:
 
 			
 
-			out_s = std::u8string_view{ s.data(), index };
+			out_s = s.substr(0, index);
 
 			s.remove_prefix(index + 2);
 
@@ -1426,20 +1432,46 @@ private:
 		}
 	}
 
+	static std::u8string_view TrimSpans(std::u8string_view s){
+
+		while (true)
+		{
+			auto a = s.find(u8" ");
+
+			if (a != decltype(s)::npos) {
+				s.remove_prefix(1);
+			}
+			else{
+				auto b = s.rfind(u8" ");
+				while (true)
+				{
+					if (b != decltype(s)::npos) {
+						s.remove_suffix(1);
+					}
+					else{
+						return s;
+					}
+				}
+				
+			}
+		}
+	}
+
 	static void AddDic(std::unordered_map<std::u8string_view, std::u8string_view>& dic, std::u8string_view s) {
 		
-		auto index = s.find(u8": ");
+		auto index = s.find(u8":");
 
 		if (index == decltype(s)::npos) {
 			throw HttpReqest::FormatException{"find header : error"};
 		}
 		else {
 
-			auto value_first = s.data() + (index + 2);
-
-			auto value_size = s.size() - (index + 2);
-
-			dic.emplace(std::u8string_view{ s.data(), index }, std::u8string_view{ value_first, value_size });
+		
+			auto key = s.substr(0, index);
+			key = TrimSpans(key);
+			auto value = s.substr(index+1);
+			value = TrimSpans(value);
+			dic.emplace(key, value);
 		}
 	}
 
@@ -1961,7 +1993,7 @@ protected:
 		Print("use send buffer");
 		handle->Write(header, size);
 
-		TcpSocket::CopyTo(
+		MyFunc::CopyTo(
 			[&file= m_file](auto buf, auto size, auto offset){return file->Read(buf, size, offset);},
 			[&soc= handle](auto buf, auto size){return soc->Write(buf, size);},
 			m_start_range,
@@ -2012,7 +2044,7 @@ protected:
 
 			handle->Write(header, size);
 
-			TcpSocket::CopyTo(
+			MyFunc::CopyTo(
 				[&databuf= *m_buf](auto buf, auto size, auto offset){
 
 					auto canreadcount = databuf.size() - offset;
