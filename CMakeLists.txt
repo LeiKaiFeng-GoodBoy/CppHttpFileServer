@@ -31,7 +31,7 @@ function(my_set_common_properties target)
     -static)
    
     target_include_directories(${target} PUBLIC
-        #${MY_DIR_PATH}/include
+        ${MY_DIR_PATH}/include
         ${MY_DIR_PATH}/../bit7z-master/include/bit7z
     )
 
