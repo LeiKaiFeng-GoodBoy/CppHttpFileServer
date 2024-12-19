@@ -164,6 +164,23 @@ public:
 		}
 	}
 
+	static std::string GetUTF8ToString(const std::wstring& s){
+		std::string ret_s{};
+
+		auto buffer = s.data();
+
+		auto size = static_cast<int>(s.size());
+
+
+		GetMultiByte(buffer, size, CP_UTF8, [&](int n)-> char*{
+
+			ret_s.resize(static_cast<size_t>(n));
+			return reinterpret_cast<char*>(ret_s.data());
+		});
+
+		return ret_s;
+	}
+
 	static std::u8string GetUTF8(const std::wstring& s) {
 		std::u8string ret_s{};
 

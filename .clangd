@@ -1,0 +1,6 @@
+
+CompileFlags:                     # Tweak the parse settings
+  Add: [-Wno-unused-parameter]             # treat all files as C++, enable more warnings
+
+  Remove: [-fconcepts]                     # strip all other warning-related flags
+ 
