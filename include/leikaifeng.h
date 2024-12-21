@@ -1,4 +1,5 @@
 #pragma once
+#include <minwindef.h>
 #ifndef _LEIKAIFENG
 #define _LEIKAIFENG
 
@@ -32,13 +33,13 @@ std::string GetWin32ErrorMessage(DWORD errorCode) {
 	return std::string{ buffer, length };
 }
 
-void Exit(const std::string& message, DWORD errorCode) {
-	std::cout << message << "	" << GetWin32ErrorMessage(errorCode) << std::endl;
+void Exit(const std::string& message, int errorCode) {
+	std::cout << message << "	" << GetWin32ErrorMessage((DWORD)errorCode) << std::endl;
 	exit(errorCode);
 }
 
 void Exit(const std::string& message) {
-	Exit(message, GetLastError());
+	Exit(message, (int)GetLastError());
 }
 
 
@@ -138,7 +139,7 @@ public:
 		else
 		{
 
-			auto length = MultiByteToWideChar(codePage, FLAG, buffer, size, nullptr, 0);
+			auto length = MultiByteToWideChar((UINT)codePage, FLAG, buffer, size, nullptr, 0);
 
 			if (0 == length) {
 				throw Win32SysteamException{};
@@ -149,7 +150,7 @@ public:
 
 				ret_s.resize(static_cast<size_t>(length));
 
-				if (length != MultiByteToWideChar(codePage, FLAG, buffer, size, ret_s.data(), length)) {
+				if (length != MultiByteToWideChar((UINT)codePage, FLAG, buffer, size, ret_s.data(), length)) {
 
 					throw Win32SysteamException{};
 				}
@@ -229,7 +230,7 @@ public:
 		}
 		else {
 
-			auto length = WideCharToMultiByte(codePage, flag, buffer, size, nullptr, 0, nullptr, nullptr);
+			auto length = WideCharToMultiByte((UINT)codePage, (DWORD)flag, buffer, size, nullptr, 0, nullptr, nullptr);
 
 			if (0 == length) {
 				throw Win32SysteamException{};
@@ -238,7 +239,7 @@ public:
 				
 				auto res_s = func(length);
 				
-				if (length != WideCharToMultiByte(codePage, flag, buffer, size, res_s, length, nullptr, nullptr))
+				if (length != WideCharToMultiByte((UINT)codePage, (DWORD)flag, buffer, size, res_s, length, nullptr, nullptr))
 				{
 					throw Win32SysteamException{};
 				}

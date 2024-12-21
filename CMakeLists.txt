@@ -20,6 +20,7 @@ function(my_set_common_properties target)
    
     target_compile_options(${target} PUBLIC
         -pedantic-errors
+        -Wsign-conversion
         -Woverflow
         -Wconversion
         -Werror
@@ -74,3 +75,10 @@ my_set_common_properties(ZipWebView)
 my_set_target_out(ZipWebView)
 
 
+add_executable(CppHttpFileServer ./CppHttpFileServer.cpp)
+
+
+my_set_common_properties(CppHttpFileServer)
+
+
+my_set_target_out(CppHttpFileServer)

@@ -1,8 +1,13 @@
 ﻿#pragma once
+#include <cstddef>
+#include <functional>
+#include <minwindef.h>
+#include <winnt.h>
 #ifndef _MYIO
 #define _MYIO
 
 #include <limits>
+#include <utility>
 #include <iostream>
 #include <algorithm>
 #include <string>
@@ -27,12 +32,14 @@
 template<typename TIn, typename TOut>
 TOut Integer_cast(TIn v){
 	
-	if(v > std::numeric_limits<TOut>::max() || v< std::numeric_limits<TOut>::min()){
-		throw std::overflow_error("Integer_cast Overflow");
+	if(std::cmp_greater(v, std::numeric_limits<TOut>::max()) 
+	|| std::cmp_less(v, std::numeric_limits<TOut>::min())){
+			throw std::overflow_error("Integer_cast Overflow");
 	}
 	else{
 		return static_cast<TOut>(v);
 	}
+	
 	
 }
 
@@ -89,7 +96,7 @@ class Win32SocketException : public Win32SysteamException {
 public:
 	using Win32SysteamException::Win32SysteamException;
 
-	Win32SocketException(const std::string& message) : Win32SysteamException(message, WSAGetLastError()) {
+	Win32SocketException(const std::string& message) : Win32SysteamException(message, (DWORD)WSAGetLastError()) {
 
 	}
 };
@@ -755,10 +762,10 @@ public:
 
 		{
 			LARGE_INTEGER offset = {};
-			offset.QuadPart=offsetCount;
+			offset.QuadPart=Integer_cast<size_t, LONGLONG>(offsetCount);
 
 			overlapped.Offset = offset.LowPart;
-			overlapped.OffsetHigh = offset.HighPart;
+			overlapped.OffsetHigh =Integer_cast<LONG, DWORD>(offset.HighPart);
 		}
 		
 		
@@ -943,6 +950,7 @@ public:
 		
 		if (TRUE == Info::GetConnectEx()(handle->GetHandle(), reinterpret_cast<sockaddr*>(&address), sizeof(address), nullptr, 0, nullptr, &overlapped)) {
 			WSAExit("connect 同步完成");
+			throw Win32SocketException{ "connect 同步完成"};
 		}
 		else {
 			auto value = WSAGetLastError();
@@ -967,6 +975,8 @@ public:
 				}
 			}
 		}
+
+
 	}
 
 	void ShutDown() {
@@ -1825,9 +1835,17 @@ protected:
 	}
 public:
 
-	HttpResponseStrContent(size_t statusCode, const std::wstring& s) : HttpResponse(statusCode), m_str(UTF8::GetUTF8(s)) {
+	constexpr static auto JSON_TYPE = u8"application/json";
 
-		this->Set(u8"Content-Type", u8"text/html; charset=utf-8");
+	constexpr static auto HTML_TYPE =u8"text/html; charset=utf-8";
+
+	HttpResponseStrContent(size_t statusCode, const std::wstring& s) : HttpResponseStrContent(statusCode, UTF8::GetUTF8(s), HTML_TYPE) {
+
+	}
+
+	HttpResponseStrContent(size_t statusCode, std::u8string&& s, const std::u8string& type) : HttpResponse(statusCode), m_str(s) {
+
+		this->Set(u8"Content-Type", type);
 		this->SetContentLength(m_str.size());
 
 	}
@@ -2007,7 +2025,7 @@ public:
 		
 		m_file = std::make_unique<CreateReadOnlyFile>(path);
 
-		m_fileSize = m_file->GetSize();
+		m_fileSize = Integer_cast<LONGLONG, size_t>( m_file->GetSize());
 
 		this->SetContentType(HttpResponseFileContent::GetName(path));
 
