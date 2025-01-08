@@ -1681,9 +1681,41 @@ public:
 
 		auto& firstLine = ret->m_firstLine;
 
-		auto length = socket->Peek(reinterpret_cast<char*>(buffer.data()), static_cast<ULONG>(buffer.size()));
+		std::u8string_view view{};
+		{
+			ULONG length =0;
+			auto bufu8 = buffer.data();
+			auto buf = reinterpret_cast<char*>(bufu8);
+			ULONG canReadSize = static_cast<ULONG>(buffer.size());
+
+			while(true){
+				auto n = socket->Read(buf+length, canReadSize);
+
+				length +=n;
+
+				canReadSize-=n;
+				view = {bufu8, length};
+				auto end = view.find(u8"\r\n\r\n");
+				if(end != std::u8string_view::npos){
+					if(end+4 == length){
+						break;
+					}
+					else{
+						throw HttpReqest::FormatException{"read one request has not use bytes"};
+					}
+				}
+				else{
+					if(n == 0){
+						throw HttpReqest::FormatException{"not read one request message"};
+					}
+				}
+			}
+
+			
 		
-		std::u8string_view view{ buffer.data(),static_cast<size_t>(length) };
+		}
+
+		
 		//Print(::UTF8::GetMultiByte(::UTF8::GetWideChar(std::u8string{ view})));
 		std::u8string_view value{};
 		
@@ -1692,7 +1724,7 @@ public:
 			throw HttpReqest::FormatException{"find header line error length:"};
 		}
 		else {
-
+			//Print(::UTF8::GetMultiByte(::UTF8::GetWideChar(std::u8string{ value})));
 			//path = HttpReqest::Path(value);
 			
 			firstLine = HttpReqest::Path(value);
@@ -1705,10 +1737,6 @@ public:
 			{
 				HttpReqest::AddDic(dic, value);
 			}
-
-			std::array<char, HttpReqest::BUFFER_SIZE> buf{};
-
-			socket->Read(buf.data(), static_cast<ULONG>(length - view.size()));
 
 			return ret;
 		}
