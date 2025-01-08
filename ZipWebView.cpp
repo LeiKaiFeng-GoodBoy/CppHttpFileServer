@@ -1,5 +1,9 @@
 
 #include <bitarchivereader.hpp>
+#include <boost/json/array.hpp>
+#include <boost/json/object.hpp>
+#include <boost/json/serialize.hpp>
+#include "include/leikaifeng.h"
 #include "myio.h"
 
 
@@ -11,12 +15,12 @@ private:
         public:
             uint32_t index;
             size_t size;
-            std::wstring path;
-            std::wstring exname;
+            std::string path;
+            std::string exname;
         MyNeedData(uint32_t index,
             size_t size,
-            std::wstring path,
-            std::wstring exname):
+            std::string path,
+            std::string exname):
             index(index), size(size),
             path(std::move(path)),
             exname(std::move(exname)){
@@ -102,8 +106,8 @@ public:
                     auto exname = item.extension();
 
                     m_data.emplace(index, MyNeedData{index, size, 
-                        UTF8::GetWideCharFromUTF8(path),
-                         UTF8::GetWideCharFromUTF8(exname),
+                        path,
+                        exname,
                     });
                 }
 
@@ -119,13 +123,13 @@ public:
 
     }
 
-    auto GetBytes(uint32_t index, std::wstring& exname){
+    auto GetBytes(uint32_t index, std::string& exname){
         
         auto v = m_data.find(index);
 
         if(v == m_data.end()){
 
-            exname = L"";
+            exname = "";
             return std::make_shared<std::vector<bit7z::byte_t>>();
         }
 
@@ -154,7 +158,7 @@ public:
         
     }
 
-    void GetFileNameAndIndex(std::function<void(uint32_t, const std::wstring&)> func){
+    void GetFileNameAndIndex(std::function<void(uint32_t, const std::string&)> func){
 
         for (const auto& item: m_data)
         {
@@ -207,19 +211,47 @@ void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& r
 
     reader->OpenFile(filePath, *v);
 
+    auto isjsonstr = request->GetQueryValue(u8"json");
+
+    if(isjsonstr == u8"1"){
+        boost::json::array vs{};
+
+        reader->GetFileNameAndIndex([&vs](uint32_t index, const std::string& name){
+
+            std::u8string path{};
+            Number::ToString(path, index);
+            
+            boost::json::object kv{};
+
+            
+            kv.emplace(UTF8::GetUTF8ToString(UTF8::GetWideChar(path)), name);
+            
+            vs.emplace_back(kv);
+
+        });
+        auto cont = boost::json::serialize(vs);
+        HttpResponseStrContent strcont{200, UTF8::GetUTF8(UTF8::GetWideCharFromUTF8(cont)), HttpResponseStrContent::JSON_TYPE};
+
+
+        strcont.Send(handle);
+
+        return;
+    }
+
+
     auto indexstring = request->GetQueryValue(u8"Index");
 
 
     if(indexstring == u8""){
          Html html {};
 
-        reader->GetFileNameAndIndex([&html](uint32_t index, const std::wstring& name){
+        reader->GetFileNameAndIndex([&html](uint32_t index, const std::string& name){
 
             std::u8string path{};
             Number::ToString(path, index);
             auto wpath = UTF8::GetWideChar(path);
             wpath.insert(0, L"?Index=");
-            html.Add(false, wpath, name);
+            html.Add(false, wpath, UTF8::GetWideCharFromUTF8( name));
 
         });
 
@@ -244,12 +276,12 @@ void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& r
 
 
     Print(index);
-    std::wstring exname{};
+    std::string exname{};
     auto buf = reader->GetBytes(static_cast<uint32_t>(index), exname);
-    exname.insert(0, L".");
+    exname.insert(0, ".");
 
-    Print("exname", UTF8::GetMultiByte(exname));
-    HttpResponseBufferContent resbuf{exname, buf};
+   
+    HttpResponseBufferContent resbuf{UTF8::GetWideCharFromUTF8(exname), buf};
     resbuf.SetRangeFromRequest(*request);
     resbuf.Send(handle);
 }

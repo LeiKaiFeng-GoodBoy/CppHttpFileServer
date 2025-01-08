@@ -44,6 +44,7 @@ function(my_set_common_properties target)
 
 
     target_link_libraries(${target} PUBLIC
+            boost_json-mt
             bit7z64
             oleaut32
             uuid
@@ -82,3 +83,13 @@ my_set_common_properties(CppHttpFileServer)
 
 
 my_set_target_out(CppHttpFileServer)
+
+
+
+add_executable(testfunc ./testfunc.cpp)
+
+
+my_set_common_properties(testfunc)
+
+
+my_set_target_out(testfunc)
