@@ -4,6 +4,7 @@
 #include <boost/json/object.hpp>
 #include <boost/json/serialize.hpp>
 #include <exception>
+#include <memory>
 #include "include/leikaifeng.h"
 #include "myio.h"
 
@@ -124,20 +125,21 @@ public:
 
     }
 
-    auto GetBytes(uint32_t index, std::string& exname){
+    bool GetBytes(uint32_t index, std::shared_ptr<std::vector<bit7z::byte_t>>& fileData, std::string& exname){
         
         auto v = m_data.find(index);
 
         if(v == m_data.end()){
 
-            exname = "";
-            return std::make_shared<std::vector<bit7z::byte_t>>();
+            return false;
         }
 
         exname = v->second.exname;
 
         if(m_upIndex == index){
-            return m_fileData;
+            fileData = m_fileData;
+
+            return true;
         }
 
         m_upIndex=index;
@@ -147,7 +149,8 @@ public:
             
             m_arc->extractTo(*m_fileData, ::Integer_cast<size_t, uint32_t>(index));
             
-            return m_fileData;
+            fileData= m_fileData;
+            return true;
         }
         catch (const bit7z::BitException &ex)
         {
@@ -155,8 +158,8 @@ public:
             Print("extractTo error", ex.what());
         }
 
-        return std::make_shared<std::vector<bit7z::byte_t>>();
-        
+       
+        return false;
     }
 
     void GetFileNameAndIndex(std::function<void(uint32_t, const std::string&)> func){
@@ -276,7 +279,13 @@ void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& r
 
     Print(index);
     std::string exname{};
-    auto buf = reader->GetBytes(static_cast<uint32_t>(index), exname);
+    std::shared_ptr<std::vector<bit7z::byte_t>> buf{};
+    if(!reader->GetBytes(static_cast<uint32_t>(index), buf, exname)){
+        HttpResponse404 res404{};
+        res404.Send(handle);
+
+        return;
+    }
     exname.insert(0, ".");
 
    
