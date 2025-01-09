@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <minwindef.h>
 #include <winnt.h>
@@ -511,12 +512,16 @@ private:
 			p->Call();
 		}
 		catch (Win32SocketException& e) {
-			Print("socket throw");
+			Print("fiber throw socket throw");
 
 			Exit(e.what());
 		}
 		catch (Win32SysteamException& e) {
-			Print("system throw");
+			Print("fiber throw system throw");
+			Exit(e.what());
+		}
+		catch (std::exception& e) {
+			Print("fiber throw exception throw");
 			Exit(e.what());
 		}
 		catch (...) {
@@ -1189,8 +1194,12 @@ public:
 
 
 class Url {
-	class Error {
+	
+	class Error : public std::exception{
+		public:
+			Error(){
 
+			}
 	};
 
 	uint32_t static GetNumber(uint32_t value) {
@@ -1943,11 +1952,11 @@ public:
 	void SetRange(size_t start, size_t end) {
 
 		if(end >= m_fileSize){
-			throw new ArgumentException{"request set renge end > fileSize"};
+			throw ArgumentException{"request set renge end > fileSize"};
 		}
 
 		if(start> end){
-			throw new ArgumentException{"request set renge start > end"};
+			throw ArgumentException{"request set renge start > end"};
 		}
 
 		auto length = (end - start) + 1;

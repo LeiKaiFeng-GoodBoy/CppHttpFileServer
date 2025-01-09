@@ -3,6 +3,7 @@
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/serialize.hpp>
+#include <exception>
 #include "include/leikaifeng.h"
 #include "myio.h"
 
@@ -151,7 +152,7 @@ public:
         catch (const bit7z::BitException &ex)
         {
 
-            Print(ex.what());
+            Print("extractTo error", ex.what());
         }
 
         return std::make_shared<std::vector<bit7z::byte_t>>();
@@ -380,15 +381,27 @@ void RequestLoop(std::shared_ptr<TcpSocket> handle, std::shared_ptr<MyZipReader2
 			Print(n, "re use link");
 		}
 	}
-	catch (Win32SysteamException& e) {
-		Print(e.what()); 
+    catch (const ArgumentException& e) {
+		Print("request loop ArgumentException:", e.what());
+
 	}
-	catch (HttpReqest::FormatException& e) {
-		Print("request format error:", e.what());
+	catch (const Win32SysteamException& e) {
+		Print("request loop Win32SysteamException", e.what()); 
 	}
-	catch (::SystemException& e) {
-		Print("SystemException :", e.what());
+	catch (const HttpReqest::FormatException& e) {
+		Print("request loop request format error:", e.what());
 	}
+	catch (const SystemException& e) {
+		Print("request loop SystemException :", e.what());
+
+    }
+    catch (const std::exception& e) {
+		Print("request loop std::exception :", e.what());
+	}
+    catch(...){
+       
+        Exit("request loop throw other error :");
+    }
 }
 
 
