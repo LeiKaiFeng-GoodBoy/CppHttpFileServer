@@ -218,13 +218,11 @@ void Response2(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& r
 
         reader->GetFileNameAndIndex([&vs](uint32_t index, const std::string& name){
 
-            std::u8string path{};
-            Number::ToString(path, index);
             
             boost::json::object kv{};
-
+            kv.emplace("index",index);
             
-            kv.emplace(UTF8::GetUTF8ToString(UTF8::GetWideChar(path)), name);
+            kv.emplace("path", name);
             
             vs.emplace_back(kv);
 
