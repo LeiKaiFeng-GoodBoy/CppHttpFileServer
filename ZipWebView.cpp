@@ -347,6 +347,40 @@ void Response(std::shared_ptr<TcpSocket> handle, std::unique_ptr<HttpReqest>& re
 	
 		EnumFileFolder eff{path};
 		EnumFileFolder::Data data{};
+
+
+
+        auto isjsonstr = request->GetQueryValue(u8"json");
+
+        if(isjsonstr == u8"1"){
+            boost::json::array vs{};
+
+
+            while (eff.Get(data))
+            {
+                std::wstring name{data.Path()};
+                auto u8 = UTF8::GetUTF8ToString(name);
+               boost::json::object kv{};
+
+               kv.emplace("isfolder",data.IsFolder());
+                
+                kv.emplace("name", u8);
+                
+                vs.emplace_back(kv);
+            }
+
+
+            auto cont = boost::json::serialize(vs);
+            HttpResponseStrContent strcont{200, UTF8::GetUTF8(UTF8::GetWideCharFromUTF8(cont)), HttpResponseStrContent::JSON_TYPE};
+
+
+            strcont.Send(handle);
+
+            return;
+        }
+
+
+
 		Html html{};
 		while (eff.Get(data))
 		{
